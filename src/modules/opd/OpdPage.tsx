@@ -244,7 +244,12 @@ export function OpdPage() {
       return record
     },
     onSuccess: (record) => {
-      qc.invalidateQueries({ queryKey: ['opd-tokens-today'] })
+      // Insert directly into cache — avoids race condition where Supabase
+      // refetch runs before the fire-and-forget insert has completed.
+      qc.setQueryData<OpdToken[]>(['opd-tokens-today'], (old = []) => [
+        record as unknown as OpdToken,
+        ...old,
+      ])
       // Save patient & fee BEFORE clearing them — needed for print
       setPrintPatient(selectedPatient)
       setPrintFee(opdFee)
@@ -582,12 +587,12 @@ export function OpdPage() {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">Temp °C</label>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Temp °F</label>
                     <input
                       {...register('temp')}
                       type="number"
                       step="0.1"
-                      placeholder="37.0"
+                      placeholder="98.6"
                       className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
                     />
                   </div>
