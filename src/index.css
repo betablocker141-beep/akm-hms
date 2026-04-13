@@ -129,3 +129,23 @@
 .bed-selected {
   @apply bg-maroon-500 border-2 border-maroon-700 text-white;
 }
+
+/* ─── Mobile: scrollable table wrapper ─────────────── */
+.table-scroll {
+  @apply w-full overflow-x-auto -mx-0;
+}
+.table-scroll table {
+  @apply min-w-[600px];
+}
+
+/* ─── Mobile touch targets ──────────────────────────── */
+@media (max-width: 640px) {
+  /* Bigger tap targets on small screens */
+  button, a[role="button"] {
+    min-height: 36px;
+  }
+  /* Prevent text overflow in table cells */
+  td, th {
+    white-space: nowrap;
+  }
+}

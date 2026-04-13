@@ -450,7 +450,7 @@ TRUNCATE TABLE patients CASCADE;`}</pre>
               <LoadingSpinner label="Loading users..." />
             </div>
           ) : (
-            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
@@ -639,7 +639,7 @@ TRUNCATE TABLE patients CASCADE;`}</pre>
               </div>
 
               {/* Per-user breakdown */}
-              <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+              <div className="bg-white rounded-xl border border-gray-200 overflow-hidden overflow-x-auto">
                 <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
                   <h3 className="font-semibold text-gray-700 text-sm">Collection by Staff — {reportDate}</h3>
                 </div>

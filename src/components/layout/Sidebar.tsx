@@ -36,7 +36,7 @@ const NAV_ITEMS: NavItem[] = [
 
 export function Sidebar() {
   const { user } = useAuthStore()
-  const { sidebarCollapsed, toggleSidebar } = useUIStore()
+  const { sidebarCollapsed, toggleSidebar, mobileSidebarOpen, closeMobileSidebar } = useUIStore()
 
   const userRole = user?.role as UserRole | undefined
 
@@ -49,20 +49,24 @@ export function Sidebar() {
     <aside
       className={cn(
         'sidebar fixed inset-y-0 left-0 z-40 flex flex-col bg-maroon-500 text-white transition-all duration-300 no-print',
-        sidebarCollapsed ? 'w-16' : 'w-60'
+        // Mobile: always full width (w-64), slides in/out via translate
+        'w-64',
+        mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full',
+        // Desktop: override translate + use collapse state for width
+        'md:translate-x-0',
+        sidebarCollapsed ? 'md:w-16' : 'md:w-60'
       )}
     >
       {/* Logo */}
       <div className="flex items-center gap-3 px-4 py-4 border-b border-maroon-600">
         <AKMLogo size={36} className="flex-shrink-0" />
-        {!sidebarCollapsed && (
-          <div className="min-w-0">
-            <p className="text-sm font-bold text-gold-400 leading-tight truncate">
-              Alim Khatoon
-            </p>
-            <p className="text-xs text-white/70 truncate">Medicare HMS</p>
-          </div>
-        )}
+        {/* Always show name on mobile drawer; on desktop respect collapse state */}
+        <div className={cn('min-w-0', sidebarCollapsed && 'md:hidden')}>
+          <p className="text-sm font-bold text-gold-400 leading-tight truncate">
+            Alim Khatoon
+          </p>
+          <p className="text-xs text-white/70 truncate">Medicare HMS</p>
+        </div>
       </div>
 
       {/* Nav */}
@@ -71,25 +75,29 @@ export function Sidebar() {
           <NavLink
             key={item.to}
             to={item.to}
+            onClick={closeMobileSidebar}
             className={({ isActive }) =>
               cn(
-                'flex items-center gap-3 px-4 py-2.5 text-sm transition-colors hover:bg-maroon-600',
+                'flex items-center gap-3 px-4 py-3 text-sm transition-colors hover:bg-maroon-600',
                 isActive ? 'bg-maroon-700 text-gold-400 font-medium' : 'text-white/85',
-                sidebarCollapsed && 'justify-center px-2'
+                sidebarCollapsed && 'md:justify-center md:px-2'
               )
             }
             title={sidebarCollapsed ? item.label : undefined}
           >
             <item.icon className="w-5 h-5 flex-shrink-0" />
-            {!sidebarCollapsed && <span className="truncate">{item.label}</span>}
+            {/* Always show label on mobile; on desktop respect collapse */}
+            <span className={cn('truncate', sidebarCollapsed && 'md:hidden')}>
+              {item.label}
+            </span>
           </NavLink>
         ))}
       </nav>
 
-      {/* Collapse toggle */}
+      {/* Collapse toggle — desktop only */}
       <button
         onClick={toggleSidebar}
-        className="flex items-center justify-center w-full py-3 border-t border-maroon-600 hover:bg-maroon-600 transition-colors"
+        className="hidden md:flex items-center justify-center w-full py-3 border-t border-maroon-600 hover:bg-maroon-600 transition-colors"
         title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
       >
         {sidebarCollapsed ? (
