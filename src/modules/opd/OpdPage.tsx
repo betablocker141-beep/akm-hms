@@ -12,7 +12,7 @@ import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
 import { OpdTokenPrint } from '@/components/print/OpdTokenPrint'
 import { supabase } from '@/lib/supabase/client'
 import { db } from '@/lib/dexie/schema'
-import { generateUUID, formatDate, todayString, padNumber } from '@/lib/utils'
+import { generateUUID, formatDate, todayString } from '@/lib/utils'
 import { fetchWithFallback } from '@/lib/utils/fetchWithFallback'
 import { useSyncStore } from '@/store/syncStore'
 import { useAuthStore } from '@/store/authStore'
@@ -23,6 +23,7 @@ import {
 import type { OpdToken, Patient, Doctor } from '@/types'
 
 const tokenSchema = z.object({
+  token_number: z.string().min(1, 'Token number required'),
   patient_id: z.string().min(1, 'Patient required'),
   doctor_id: z.string().min(1, 'Doctor required'),
   date: z.string().min(1, 'Date required'),
@@ -167,23 +168,7 @@ export function OpdPage() {
   const mutation = useMutation({
     mutationFn: async (data: TokenForm) => {
       const online = useSyncStore.getState().isOnline && navigator.onLine
-      const today = data.date
-      let tokenNumber = ''
-
-      // Always count from Dexie first — fast and works offline.
-      // Try Supabase RPC only if online, with 3s timeout fallback.
-      const localCount = await db.opd_tokens.where('date').equals(today).count()
-      tokenNumber = `OPD-${padNumber(localCount + 1)}`
-      if (online) {
-        try {
-          const { data: tnData } = await Promise.race([
-            supabase.rpc('get_next_opd_token', { token_date: today }),
-            new Promise<never>((_, r) => setTimeout(() => r(new Error('timeout')), 3000)),
-          ]) as { data: string | null }
-          if (tnData) tokenNumber = tnData
-        } catch { /* use local count */ }
-      }
-
+      const tokenNumber = data.token_number.trim()
       const localId = generateUUID()
       const record = {
         id: localId,
@@ -429,6 +414,24 @@ export function OpdPage() {
             </div>
 
             <form onSubmit={handleSubmit((d) => mutation.mutate(d))} className="p-6 space-y-4">
+              {/* Token Number */}
+              <div className="bg-maroon-50 border border-maroon-200 rounded-lg p-3">
+                <label className="block text-sm font-semibold text-maroon-800 mb-1">
+                  Token Number *
+                </label>
+                <input
+                  {...register('token_number')}
+                  type="text"
+                  autoFocus
+                  placeholder="e.g. 5  or  12  or  A-3"
+                  className="w-full px-3 py-2 border border-maroon-300 rounded-lg text-lg font-bold text-center tracking-widest text-maroon-700 focus:outline-none focus:ring-2 focus:ring-maroon-500 bg-white"
+                />
+                {errors.token_number && (
+                  <p className="text-xs text-red-600 mt-1">{errors.token_number.message}</p>
+                )}
+                <p className="text-xs text-maroon-600 mt-1">Reception assigns the token based on current queue</p>
+              </div>
+
               {/* Patient search */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
