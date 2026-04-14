@@ -136,7 +136,13 @@ export function AdminPage() {
 
   const addUserMutation = useMutation({
     mutationFn: async (data: NewUserForm) => {
-      // 1. Create Supabase auth user (works when email confirm is OFF)
+      // Save the current admin session so we can restore it after signUp.
+      // When Supabase email-confirmation is OFF, signUp() auto-signs-in the
+      // new account and silently logs out the admin — causing the subsequent
+      // users-table upsert to fail (new user has no role → RLS blocks it).
+      const { data: { session: adminSession } } = await supabase.auth.getSession()
+
+      // 1. Create Supabase auth user
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: data.email,
         password: data.password,
@@ -146,7 +152,15 @@ export function AdminPage() {
       const userId = authData.user?.id
       if (!userId) throw new Error('Failed to create auth user')
 
-      // 2. Upsert into users table with name + role
+      // 2. Restore admin session immediately (no-op if signUp didn't switch it)
+      if (adminSession) {
+        await supabase.auth.setSession({
+          access_token: adminSession.access_token,
+          refresh_token: adminSession.refresh_token,
+        })
+      }
+
+      // 3. Upsert into users table with name + role (using admin's session)
       const { error: profileError } = await supabase.from('users').upsert({
         id: userId,
         email: data.email,
