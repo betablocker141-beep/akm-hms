@@ -4,7 +4,7 @@
  * Include this inside a ref passed to react-to-print.
  */
 import { AKMLogo } from '@/components/shared/AKMLogo'
-import { formatDate } from '@/lib/utils'
+import { formatDate, calculateAge } from '@/lib/utils'
 import type { OpdToken, Patient, Doctor } from '@/types'
 
 interface OpdTokenPrintProps {
@@ -64,7 +64,8 @@ export function OpdTokenPrint({ token, patient, doctor, fee, size = 'thermal' }:
 
       {/* Details */}
       <div className="space-y-1.5 text-xs">
-        <DetailRow label="Patient" value={patient?.name ?? '—'} />
+        <DetailRow label="Patient" value={patient?.name ?? '—'} bold />
+        <DetailRow label="Age" value={patient ? `${calculateAge(patient.dob)} / ${patient.gender}` : '—'} bold />
         <DetailRow label="MRN" value={patient?.mrn ?? '—'} />
         <DetailRow label="Doctor" value={doctor?.name ?? '—'} />
         <DetailRow label="Specialty" value={doctor?.specialty ?? '—'} />
@@ -147,11 +148,11 @@ export function OpdTokenPrint({ token, patient, doctor, fee, size = 'thermal' }:
   )
 }
 
-function DetailRow({ label, value }: { label: string; value: string }) {
+function DetailRow({ label, value, bold }: { label: string; value: string; bold?: boolean }) {
   return (
     <div className="flex justify-between gap-2">
-      <span className="text-gray-500 font-medium flex-shrink-0">{label}:</span>
-      <span className="text-gray-800 text-right">{value}</span>
+      <span className={`flex-shrink-0 ${bold ? 'text-gray-700 font-semibold' : 'text-gray-500 font-medium'}`}>{label}:</span>
+      <span className={`text-right ${bold ? 'text-gray-900 font-semibold' : 'text-gray-800'}`}>{value}</span>
     </div>
   )
 }

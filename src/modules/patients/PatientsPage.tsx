@@ -100,7 +100,7 @@ export function PatientsPage() {
       name: data.name,
       phone: data.phone,
       gender: data.gender as Gender,
-      dob: data.age ? `${new Date().getFullYear() - data.age}-06-15` : null,
+      dob: data.age ? `${new Date().getFullYear() - data.age}-01-01` : null,
       address: data.address || null,
       blood_group: (data.blood_group as BloodGroup) || null,
       created_at: new Date().toISOString(),
