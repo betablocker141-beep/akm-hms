@@ -23,16 +23,21 @@ async function fetchReports(): Promise<UltrasoundReport[]> {
       if (error) throw error
       const online = (data ?? []) as UltrasoundReport[]
 
-      // Merge in pending local reports not yet pushed to Supabase
-      const pending = await db.ultrasound_reports.where('sync_status').equals('pending').toArray()
+      // Merge in pending/conflict local reports not yet pushed to Supabase
+      const unsynced = await db.ultrasound_reports
+        .where('sync_status').anyOf('pending', 'conflict').toArray()
       const onlineIds = new Set(online.map((r) => r.id))
-      const onlyLocal = pending.filter((r) => !onlineIds.has(r.server_id ?? '') && !onlineIds.has(r.local_id ?? ''))
+      const onlyLocal = unsynced.filter(
+        (r) => !onlineIds.has(r.server_id ?? '') && !onlineIds.has(r.local_id ?? '')
+      )
       return [...online, ...(onlyLocal as unknown as UltrasoundReport[])]
     },
     async () => {
-      // Offline: only show records confirmed in Supabase (server_id set) or pending upload
+      // Offline: show confirmed records + anything not yet pushed (pending or conflict)
       const all = await db.ultrasound_reports.orderBy('study_date').reverse().toArray()
-      return all.filter((r) => r.server_id || r.sync_status === 'pending') as unknown as UltrasoundReport[]
+      return all.filter(
+        (r) => r.server_id || r.sync_status === 'pending' || r.sync_status === 'conflict'
+      ) as unknown as UltrasoundReport[]
     },
   )
 }

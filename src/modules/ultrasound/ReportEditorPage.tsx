@@ -206,8 +206,9 @@ export function ReportEditorPage() {
             .eq('id', id)
             .select()
             .single()
-          if (error) throw new Error(error.message)
-          if (saved) {
+          if (error) {
+            console.error('[us] Supabase update failed, kept as pending:', error.message)
+          } else if (saved) {
             await db.ultrasound_reports
               .filter((r) => r.local_id === id || r.server_id === id)
               .modify({ server_id: saved.id, sync_status: 'synced' })
