@@ -242,11 +242,10 @@ export function ReportEditorPage() {
             .select()
             .single()
           if (error) {
-            // Remove the local draft so we don't have orphaned records
-            await db.ultrasound_reports.where('local_id').equals(localId).delete()
-            throw new Error(error.message)
-          }
-          if (saved) {
+            // Leave the local draft intact so the sync engine can retry —
+            // DO NOT delete it (that was losing reports entirely).
+            console.error('[us] Supabase insert failed, kept as pending:', error.message)
+          } else if (saved) {
             await db.ultrasound_reports
               .where('local_id')
               .equals(localId)

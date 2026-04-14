@@ -388,10 +388,11 @@ CREATE POLICY "ipd_proc_write"  ON ipd_procedures FOR ALL    TO authenticated
 -- ─── ULTRASOUND
 CREATE POLICY "us_select" ON ultrasound_reports FOR SELECT TO authenticated USING (TRUE);
 CREATE POLICY "us_insert" ON ultrasound_reports FOR INSERT TO authenticated
-  WITH CHECK (current_user_role() IN ('admin','radiologist'));
+  WITH CHECK (current_user_role() IN ('admin','radiologist','receptionist','doctor'));
 CREATE POLICY "us_update" ON ultrasound_reports FOR UPDATE TO authenticated
-  USING (current_user_role() IN ('admin','radiologist') OR
-         (current_user_role() = 'radiologist' AND status = 'draft'));
+  USING (current_user_role() IN ('admin','radiologist','receptionist','doctor'));
+CREATE POLICY "us_delete" ON ultrasound_reports FOR DELETE TO authenticated
+  USING (current_user_role() IN ('admin','radiologist','receptionist','doctor'));
 
 -- ─── INVOICES
 CREATE POLICY "inv_select" ON invoices FOR SELECT TO authenticated USING (TRUE);
