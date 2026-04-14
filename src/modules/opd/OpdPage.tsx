@@ -143,20 +143,27 @@ export function OpdPage() {
     queryFn: fetchDoctors,
   })
 
-  // Patient name lookup map for the token list
-  const { data: patientsMap = {} } = useQuery<Record<string, string>>({
+  // Patient lookup map for the token list and print modal
+  const { data: patientsMap = {} } = useQuery<Record<string, Patient>>({
     queryKey: ['patients-map'],
-    queryFn: () => fetchWithFallback(
-      async () => {
-        const { data, error } = await supabase.from('patients').select('id, name')
-        if (error) throw error
-        return Object.fromEntries((data ?? []).map((p: { id: string; name: string }) => [p.id, p.name])) as Record<string, string>
-      },
-      async () => {
-        const all = await db.patients.toArray()
-        return Object.fromEntries(all.map((p) => [p.local_id, p.name])) as Record<string, string>
-      },
-    ),
+    queryFn: async () => {
+      // Always seed the map from Dexie so local-only (unsynced) patients are
+      // always resolvable, even when the app is online.
+      const all = await db.patients.toArray()
+      const map: Record<string, Patient> = {}
+      for (const p of all) {
+        map[p.local_id] = p as unknown as Patient
+        if (p.server_id) map[p.server_id] = p as unknown as Patient
+      }
+      // Merge Supabase data on top (adds any patients not yet in local Dexie)
+      try {
+        const { data, error } = await supabase.from('patients').select('id, name, mrn, dob, gender, phone')
+        if (!error && data) {
+          for (const p of data as Patient[]) map[p.id] = p
+        }
+      } catch { /* stay with Dexie-only map */ }
+      return map
+    },
   })
 
   const { data: patientResults = [] } = useQuery({
@@ -196,6 +203,7 @@ export function OpdPage() {
 
   const openPrint = (token: OpdToken) => {
     setSelectedToken(token)
+    setPrintPatient(patientsMap[token.patient_id] ?? null)
     setShowPrintModal(true)
   }
 
@@ -372,7 +380,7 @@ export function OpdPage() {
                         </span>
                       </td>
                       <td className="px-4 py-3 font-medium text-gray-800">
-                        {patientsMap[token.patient_id] ?? `${token.patient_id.slice(0, 8)}…`}
+                        {patientsMap[token.patient_id]?.name ?? `${token.patient_id.slice(0, 8)}…`}
                       </td>
                       <td className="px-4 py-3 text-gray-600">{doc?.name ?? '—'}</td>
                       <td className="px-4 py-3 text-gray-600">{token.time_slot}</td>

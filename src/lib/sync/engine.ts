@@ -32,6 +32,12 @@ const TABLE_MAP = {
 // Tables that should only pull recent records (last 60 days)
 const DATE_SENSITIVE_TABLES = new Set<SyncableTable>(['opd_tokens', 'er_visits'])
 
+// Fields stored only in Dexie (not in the matching Supabase table).
+// These are stripped before any push to Supabase to avoid "column does not exist" errors.
+const TABLE_EXCLUDE_FIELDS: Partial<Record<SyncableTable, Set<string>>> = {
+  opd_tokens: new Set(['bp', 'pulse', 'temp', 'spo2', 'rr']),
+}
+
 // Tables that have NO created_at column in Supabase — must NOT use created_at ordering.
 // Pulling these without ordering/limit fetches all rows (fine for small reference tables).
 const TABLES_WITHOUT_CREATED_AT = new Set<SyncableTable>(['doctors'])
@@ -72,7 +78,12 @@ async function syncTable(tableName: SyncableTable) {
       // Strip Dexie-only fields + the local `id` so we never accidentally
       // overwrite the Supabase primary key column during an UPDATE.
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { local_id, sync_status, server_id, id: _id, ...serverRecord } = record
+      const { local_id, sync_status, server_id, id: _id, ...rest } = record
+      // Also remove any fields that exist in Dexie but have no column in Supabase
+      const excludeFields = TABLE_EXCLUDE_FIELDS[tableName]
+      const serverRecord = excludeFields
+        ? Object.fromEntries(Object.entries(rest).filter(([k]) => !excludeFields.has(k)))
+        : rest
 
       if (record.server_id) {
         // Update existing record
@@ -104,7 +115,8 @@ async function syncTable(tableName: SyncableTable) {
       await localTable.where('local_id').equals(local_id).modify({
         sync_status: 'synced',
       })
-    } catch {
+    } catch (err) {
+      console.error(`[sync] failed to push ${tableName} record ${record.local_id}:`, err)
       await (db as any)[tableName]
         .where('local_id')
         .equals(record.local_id)

@@ -105,17 +105,22 @@ export function IpdPage() {
   })
 
   // Patient name lookup map
-  const { data: patientsMap = {} } = useQuery<Record<string, string>>({
+  const { data: patientsMap = {} } = useQuery<Record<string, Patient>>({
     queryKey: ['patients-map'],
     queryFn: () => fetchWithFallback(
       async () => {
-        const { data, error } = await supabase.from('patients').select('id, name')
+        const { data, error } = await supabase.from('patients').select('id, name, mrn, dob, gender, phone')
         if (error) throw error
-        return Object.fromEntries((data ?? []).map((p: { id: string; name: string }) => [p.id, p.name])) as Record<string, string>
+        return Object.fromEntries((data ?? []).map((p: Patient) => [p.id, p])) as Record<string, Patient>
       },
       async () => {
         const all = await db.patients.toArray()
-        return Object.fromEntries(all.map((p) => [p.local_id, p.name])) as Record<string, string>
+        const map: Record<string, Patient> = {}
+        for (const p of all) {
+          map[p.local_id] = p as unknown as Patient
+          if (p.server_id) map[p.server_id] = p as unknown as Patient
+        }
+        return map
       },
     ),
   })
@@ -310,7 +315,7 @@ export function IpdPage() {
                   return (
                     <tr key={adm.id} className="hover:bg-gray-50">
                       <td className="px-4 py-3 text-gray-800 font-medium">
-                        {patientsMap[adm.patient_id] ?? `${adm.patient_id.slice(0, 8)}…`}
+                        {patientsMap[adm.patient_id]?.name ?? `${adm.patient_id.slice(0, 8)}…`}
                       </td>
                       <td className="px-4 py-3 text-gray-600">
                         {adm.ward} / <strong>{adm.bed_number}</strong>
@@ -330,7 +335,7 @@ export function IpdPage() {
                           </button>
                           <WAButton
                             href={waIpdAdmission({
-                              patientName: patientsMap[adm.patient_id] ?? 'Patient',
+                              patientName: patientsMap[adm.patient_id]?.name ?? 'Patient',
                               ward: adm.ward,
                               bed: adm.bed_number,
                               admitDate: formatDate(adm.admit_date),
@@ -507,7 +512,7 @@ export function IpdPage() {
               </button>
               <WAButton
                 href={waIpdDischarge({
-                  patientName: patientsMap[selectedAdmission.patient_id] ?? 'Patient',
+                  patientName: patientsMap[selectedAdmission.patient_id]?.name ?? 'Patient',
                   dischargeDate: formatDate(todayString()),
                   phone: patientPhone || '03000000000',
                 })}

@@ -160,8 +160,11 @@ CREATE TABLE IF NOT EXISTS invoices (
   payment_method  TEXT CHECK (payment_method IN ('cash','card','bank_transfer','jazzcash','easypaisa')),
   status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','partial','paid')),
   invoice_number  TEXT NOT NULL UNIQUE,
+  receipt_no      TEXT,
   notes           TEXT,
-  created_at      TIMESTAMPTZ DEFAULT NOW()
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  created_by_id   UUID,
+  created_by_name TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_inv_patient ON invoices(patient_id);
 CREATE INDEX IF NOT EXISTS idx_inv_status  ON invoices(status);

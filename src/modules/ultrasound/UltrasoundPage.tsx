@@ -10,7 +10,7 @@ import { db } from '@/lib/dexie/schema'
 import { formatDate } from '@/lib/utils'
 import { fetchWithFallback } from '@/lib/utils/fetchWithFallback'
 import { useSyncStore } from '@/store/syncStore'
-import type { UltrasoundReport } from '@/types'
+import type { UltrasoundReport, Patient } from '@/types'
 
 async function fetchReports(): Promise<UltrasoundReport[]> {
   return fetchWithFallback(
@@ -48,22 +48,22 @@ export function UltrasoundPage() {
   })
 
   // Patient map for name lookup in list
-  const { data: patientsMap = {} } = useQuery<Record<string, string>>({
+  const { data: patientsMap = {} } = useQuery<Record<string, Patient>>({
     queryKey: ['patients-map'],
     queryFn: () => fetchWithFallback(
       async () => {
-        const { data, error } = await supabase.from('patients').select('id, name')
+        const { data, error } = await supabase.from('patients').select('id, name, mrn, dob, gender, phone')
         if (error) throw error
-        return Object.fromEntries((data ?? []).map((p: { id: string; name: string }) => [p.id, p.name])) as Record<string, string>
+        return Object.fromEntries((data ?? []).map((p: Patient) => [p.id, p])) as Record<string, Patient>
       },
       async () => {
         const all = await db.patients.toArray()
         // Index by every possible ID so the lookup works regardless of which
         // UUID the report stored (local UUID before sync, Supabase UUID after)
-        const map: Record<string, string> = {}
+        const map: Record<string, Patient> = {}
         for (const p of all) {
-          map[p.local_id] = p.name
-          if (p.server_id) map[p.server_id] = p.name
+          map[p.local_id] = p as unknown as Patient
+          if (p.server_id) map[p.server_id] = p as unknown as Patient
         }
         return map
       },
@@ -148,7 +148,7 @@ export function UltrasoundPage() {
                 </tr>
               ) : (
                 filtered.map((report) => {
-                  const patientName = patientsMap[report.patient_id] ?? `${report.patient_id.slice(0, 8)}…`
+                  const patientName = patientsMap[report.patient_id]?.name ?? `${report.patient_id.slice(0, 8)}…`
                   return (
                     <tr key={report.id} className="hover:bg-gray-50">
                       <td className="px-4 py-3 text-gray-600">{formatDate(report.study_date)}</td>
