@@ -54,7 +54,6 @@ async function resolvePatientId(localOrServerId: string): Promise<string> {
 }
 
 // Tables that have NO created_at column in Supabase — must NOT use created_at ordering.
-// Pulling these without ordering/limit fetches all rows (fine for small reference tables).
 const TABLES_WITHOUT_CREATED_AT = new Set<SyncableTable>(['doctors'])
 
 // Tables where we remove stale Dexie records after each pull.
@@ -78,7 +77,6 @@ const CLEANUP_AFTER_PULL = new Set<SyncableTable>([
 ])
 
 // Guard: prevent two runSync() calls from running at the same time.
-// Without this, the online event + setInterval could race and create duplicate records.
 let _syncRunning = false
 
 async function syncTable(tableName: SyncableTable) {
@@ -124,7 +122,9 @@ async function syncTable(tableName: SyncableTable) {
 
         if (error) throw error
 
-        // Update Dexie: set server_id AND update id field so it matches Supabase
+        // Update Dexie: set id, server_id AND sync_status so it matches Supabase.
+        // Setting id = newId = server_id is critical — without this the pull's
+        // duplicate-detection sees id !== server_id and may delete the record.
         await localTable.where('local_id').equals(local_id).modify({
           id: newId,
           server_id: newId,
@@ -150,16 +150,13 @@ async function pullTableFromSupabase(tableName: SyncableTable) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const localTable = (db as any)[tableName]
 
-  // Build the Supabase query — tables without created_at (e.g. doctors) must
-  // NOT use created_at ordering or they silently fail and never sync.
+  // Build the Supabase query
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let query: any = supabase.from(TABLE_MAP[tableName]).select('*')
 
   if (TABLES_WITHOUT_CREATED_AT.has(tableName)) {
-    // Small reference tables — fetch all rows, order by id (always exists)
     query = query.order('id')
   } else if (DATE_SENSITIVE_TABLES.has(tableName)) {
-    // Only last 60 days for high-volume date-keyed tables
     const cutoff = new Date()
     cutoff.setDate(cutoff.getDate() - 60)
     query = query
@@ -174,8 +171,6 @@ async function pullTableFromSupabase(tableName: SyncableTable) {
   if (error) throw error
   if (!data || data.length === 0) return
 
-  // Process in chunks of 50 to avoid long-running IndexedDB transactions
-  // that would block concurrent writes (e.g. patient registration offline)
   const CHUNK = 50
   for (let i = 0; i < data.length; i += CHUNK) {
     const chunk = data.slice(i, i + CHUNK)
@@ -204,9 +199,20 @@ async function pullTableFromSupabase(tableName: SyncableTable) {
                 .equals(existing.local_id)
                 .modify({ ...record, local_id: existing.local_id, server_id: record.id, sync_status: 'synced' })
             }
-            // If BOTH lookups returned a record and they're different, we have a
-            // duplicate — delete the extra one now.
-            if (byServerId && byLocalId && byServerId.local_id !== byLocalId.local_id) {
+            // ── SAFE duplicate cleanup ───────────────────────────────────────
+            // Only delete the byLocalId record if:
+            //   1. Both lookups returned different records (genuine duplicate)
+            //   2. The table is NOT ultrasound_reports (too risky to auto-delete)
+            //   3. The byLocalId record is synced (not a pending local edit)
+            // This prevents the bug where a report disappears because the engine
+            // incorrectly identifies a local record as a "stale duplicate".
+            if (
+              byServerId &&
+              byLocalId &&
+              byServerId.local_id !== byLocalId.local_id &&
+              tableName !== 'ultrasound_reports' &&
+              byLocalId.sync_status === 'synced'
+            ) {
               await localTable.where('local_id').equals(byLocalId.local_id).delete()
             }
           } else {
@@ -222,16 +228,13 @@ async function pullTableFromSupabase(tableName: SyncableTable) {
         }
       }
     })
-    // Yield to the event loop between chunks so other DB ops can proceed
+    // Yield to the event loop between chunks
     await new Promise<void>((res) => setTimeout(res, 0))
   }
 
-  // Remove stale Dexie records for tables where we pulled a full (or near-full)
-  // dataset. A record is stale if it was previously synced but its server_id is
-  // no longer present in Supabase — e.g. deleted on another device.
+  // Remove stale Dexie records for tables where we pulled a full dataset.
   if (CLEANUP_AFTER_PULL.has(tableName)) {
     const pulledIds = new Set((data as { id: string }[]).map((r) => r.id))
-    // Collect synced Dexie records whose server_id isn't in the pulled set
     const allLocal = await localTable.toArray()
     const stale = (allLocal as { local_id: string; server_id: string | null; sync_status: string }[])
       .filter((r) => r.sync_status === 'synced' && r.server_id && !pulledIds.has(r.server_id))
@@ -256,7 +259,6 @@ async function pullFromSupabase() {
 }
 
 export async function runSync() {
-  // Prevent concurrent runs (online event + setInterval could both fire)
   if (_syncRunning) return
   _syncRunning = true
 
@@ -296,10 +298,8 @@ export async function runSync() {
     setPendingCount(total)
     setLastSyncAt(new Date().toISOString())
 
-    // Mark Supabase as reachable (resets the circuit breaker in fetchWithFallback)
     markSupabaseOnline()
 
-    // Pull Supabase records into Dexie for offline availability
     await pullFromSupabase()
     await queryClient.invalidateQueries({ refetchType: 'all' })
   } finally {
@@ -326,23 +326,18 @@ export function initSyncListeners() {
   window.addEventListener('online', async () => {
     setOnline(true)
     await runSync()
-    // Extra invalidation after sync so UI updates without any manual refresh
     await queryClient.invalidateQueries({ refetchType: 'all' })
   })
 
   window.addEventListener('offline', () => {
     setOnline(false)
-    // Re-run all active queries so they switch to Dexie fallback immediately
     void queryClient.invalidateQueries({ refetchType: 'all' })
   })
 
-  // Initial sync if online
   if (navigator.onLine) {
     runSync()
   }
 
-  // Periodic background sync every 30 s — keeps data fresh without any page
-  // refresh. If offline, runSync() returns early; when back online it syncs.
   setInterval(() => {
     runSync().catch(() => { /* silent */ })
   }, 30_000)

@@ -7,23 +7,24 @@ import { StatusBadge } from '@/components/shared/StatusBadge'
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
 import { supabase } from '@/lib/supabase/client'
 import { db } from '@/lib/dexie/schema'
-import { formatDate } from '@/lib/utils'
+import { formatDate, todayString } from '@/lib/utils'
 import { useSyncStore } from '@/store/syncStore'
+import { fetchWithFallback } from '@/lib/utils/fetchWithFallback'
 import type { UltrasoundReport, Patient } from '@/types'
 
 async function fetchReports(): Promise<UltrasoundReport[]> {
-  // ── Dexie is PRIMARY — always show every record saved locally ────────────
-  // This prevents the "saved then disappears on sync" bug: when the sync engine
-  // pushes a record and marks it 'synced', a subsequent Supabase SELECT that
-  // returns 0 rows (RLS lag, network blip) would otherwise wipe the list.
+  // ── Step 1: Always load from Dexie first ────────────────────────────────
   const allLocal = await db.ultrasound_reports
     .orderBy('study_date').reverse().toArray()
 
-  // ── Supabase is ADDITIVE — only used to pull records from other devices ──
+  // ── Step 2: Offline — return Dexie only ─────────────────────────────────
   if (!navigator.onLine) {
     return allLocal as unknown as UltrasoundReport[]
   }
 
+  // ── Step 3: Online — fetch Supabase and WRITE into Dexie, then re-read ──
+  // This ensures Dexie is always the single source of truth for the list.
+  // We never try to merge arrays in memory (that logic had ID-mismatch bugs).
   try {
     const { data, error } = await supabase
       .from('ultrasound_reports')
@@ -32,37 +33,72 @@ async function fetchReports(): Promise<UltrasoundReport[]> {
       .limit(500)
 
     if (error || !data || data.length === 0) {
+      // Supabase unavailable or empty — Dexie is authoritative
       return allLocal as unknown as UltrasoundReport[]
     }
 
-    // IDs already represented in Dexie (by server_id or local_id)
-    const localRefs = new Set<string>([
-      ...allLocal.map((r) => r.server_id).filter((s): s is string => !!s),
-      ...allLocal.map((r) => r.local_id),
-    ])
+    // Write every Supabase record into Dexie (upsert by server_id / local_id)
+    // This is the same logic as pullTableFromSupabase but targeted and safe:
+    // we never delete anything here — only add/update.
+    await db.transaction('rw', db.ultrasound_reports, async () => {
+      for (const record of data) {
+        try {
+          const byServerId = await db.ultrasound_reports
+            .where('server_id').equals(record.id).first()
+          const byLocalId = !byServerId
+            ? await db.ultrasound_reports.where('local_id').equals(record.id).first()
+            : null
+          const existing = byServerId ?? byLocalId
 
-    // Only add Supabase records that are NOT already in Dexie
-    // (i.e. records created on another device / browser)
-    const fromServerOnly = (data as UltrasoundReport[]).filter(
-      (r) => !localRefs.has(r.id)
-    )
-
-    return [...allLocal, ...fromServerOnly] as UltrasoundReport[]
+          if (existing) {
+            // Only overwrite if not a locally-pending (unsaved) edit
+            if (existing.sync_status !== 'pending') {
+              await db.ultrasound_reports
+                .where('local_id').equals(existing.local_id)
+                .modify({
+                  ...record,
+                  id: existing.local_id,     // keep Dexie primary key stable
+                  local_id: existing.local_id,
+                  server_id: record.id,
+                  sync_status: 'synced',
+                })
+            }
+          } else {
+            // New record from another device — insert it
+            await db.ultrasound_reports.put({
+              ...record,
+              id: record.id,
+              local_id: record.id,
+              server_id: record.id,
+              sync_status: 'synced',
+            })
+          }
+        } catch {
+          // skip individual failures silently
+        }
+      }
+    })
   } catch {
-    // Network error — fall back to Dexie only
-    return allLocal as unknown as UltrasoundReport[]
+    // Network error — Dexie is authoritative
   }
+
+  // ── Step 4: Re-read Dexie after upsert — this is the final source ───────
+  const final = await db.ultrasound_reports
+    .orderBy('study_date').reverse().toArray()
+  return final as unknown as UltrasoundReport[]
 }
 
 export function UltrasoundPage() {
   const [filter, setFilter] = useState<'all' | 'draft' | 'final'>('all')
+  const [selectedDate, setSelectedDate] = useState('')  // empty = all dates
   const qc = useQueryClient()
   const { isOnline } = useSyncStore()
 
   const { data: reports = [], isLoading } = useQuery({
     queryKey: ['us-reports'],
     queryFn: fetchReports,
-    staleTime: 30_000,       // don't refetch for 30 s — prevents "flicker then gone"
+    staleTime: 60_000,          // 60 s — don't refetch too eagerly
+    gcTime: 5 * 60_000,         // keep cache alive 5 min so sync invalidations don't blank the list
     refetchOnWindowFocus: false,
   })
 
@@ -77,8 +113,6 @@ export function UltrasoundPage() {
       },
       async () => {
         const all = await db.patients.toArray()
-        // Index by every possible ID so the lookup works regardless of which
-        // UUID the report stored (local UUID before sync, Supabase UUID after)
         const map: Record<string, Patient> = {}
         for (const p of all) {
           map[p.local_id] = p as unknown as Patient
@@ -106,21 +140,40 @@ export function UltrasoundPage() {
     deleteReport.mutate(id)
   }
 
-  const filtered = filter === 'all' ? reports : reports.filter((r) => r.status === filter)
+  const filtered = reports
+    .filter((r) => filter === 'all' || r.status === filter)
+    .filter((r) => !selectedDate || r.study_date === selectedDate)
 
   return (
     <div>
       <PageHeader
         title="Ultrasound Department"
-        subtitle={`${reports.length} total reports`}
+        subtitle={selectedDate ? `${formatDate(selectedDate)} | ${filtered.length} report${filtered.length !== 1 ? 's' : ''}` : `${reports.length} total reports`}
         actions={
-          <Link
-            to="/ultrasound/new"
-            className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm font-medium"
-          >
-            <Plus className="w-4 h-4" />
-            New Report
-          </Link>
+          <div className="flex items-center gap-2">
+            <input
+              type="date"
+              value={selectedDate}
+              max={todayString()}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+            />
+            {selectedDate && (
+              <button
+                onClick={() => setSelectedDate('')}
+                className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                All Dates
+              </button>
+            )}
+            <Link
+              to="/ultrasound/new"
+              className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm font-medium"
+            >
+              <Plus className="w-4 h-4" />
+              New Report
+            </Link>
+          </div>
         }
       />
 
@@ -162,14 +215,14 @@ export function UltrasoundPage() {
               {filtered.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="text-center py-12 text-gray-400">
-                    No ultrasound reports found.
+                    {selectedDate ? `No reports found for ${formatDate(selectedDate)}.` : 'No ultrasound reports found.'}
                   </td>
                 </tr>
               ) : (
                 filtered.map((report) => {
                   const patientName = patientsMap[report.patient_id]?.name ?? `${report.patient_id.slice(0, 8)}…`
                   return (
-                    <tr key={report.id} className="hover:bg-gray-50">
+                    <tr key={report.local_id ?? report.id} className="hover:bg-gray-50">
                       <td className="px-4 py-3 text-gray-600">{formatDate(report.study_date)}</td>
                       <td className="px-4 py-3 text-gray-800 font-medium">
                         {patientName}
@@ -187,20 +240,20 @@ export function UltrasoundPage() {
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
                           <Link
-                            to={`/ultrasound/${report.id}/edit`}
+                            to={`/ultrasound/${report.server_id ?? report.local_id ?? report.id}/edit`}
                             className="p-1.5 text-gray-500 hover:text-purple-600 hover:bg-purple-50 rounded"
                             title={report.status === 'final' ? 'View / Unlock to edit' : 'Edit'}
                           >
                             {report.status === 'final' ? <Lock className="w-3.5 h-3.5" /> : <Edit className="w-4 h-4" />}
                           </Link>
                           <Link
-                            to={`/ultrasound/${report.id}/edit`}
+                            to={`/ultrasound/${report.server_id ?? report.local_id ?? report.id}/edit`}
                             className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded"
                           >
                             <Printer className="w-4 h-4" />
                           </Link>
                           <button
-                            onClick={() => handleDelete(report.id)}
+                            onClick={() => handleDelete(report.local_id ?? report.id)}
                             className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded"
                             title="Delete report"
                           >

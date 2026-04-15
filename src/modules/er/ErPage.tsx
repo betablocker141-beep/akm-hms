@@ -36,15 +36,14 @@ const erSchema = z.object({
 
 type ErForm = z.infer<typeof erSchema>
 
-async function fetchErVisits(): Promise<ErVisit[]> {
-  const today = todayString()
+async function fetchErVisitsByDate(date: string): Promise<ErVisit[]> {
   return fetchWithFallback(
     async () => {
-      const { data, error } = await supabase.from('er_visits').select('*').eq('visit_date', today).order('created_at', { ascending: false })
+      const { data, error } = await supabase.from('er_visits').select('*').eq('visit_date', date).order('created_at', { ascending: false })
       if (error) throw error
       return data as ErVisit[]
     },
-    () => db.er_visits.where('visit_date').equals(today).reverse().toArray() as unknown as Promise<ErVisit[]>,
+    () => db.er_visits.where('visit_date').equals(date).reverse().toArray() as unknown as Promise<ErVisit[]>,
   )
 }
 
@@ -85,7 +84,23 @@ async function searchPatients(q: string): Promise<Patient[]> {
   )
 }
 
+async function getNextInvoiceNumber(): Promise<string> {
+  const year = new Date().getFullYear()
+  const count = await db.invoices.count()
+  const localNumber = `INV-${year}-${padNumber(count + 1, 4)}`
+  if (!navigator.onLine) return localNumber
+  try {
+    const { data } = await Promise.race([
+      supabase.rpc('get_next_invoice_number'),
+      new Promise<never>((_, r) => setTimeout(() => r(new Error('timeout')), 3000)),
+    ]) as { data: string | null }
+    if (data) return data as string
+  } catch { /* use local */ }
+  return localNumber
+}
+
 export function ErPage() {
+  const [selectedDate, setSelectedDate] = useState(todayString())
   const [showForm, setShowForm] = useState(false)
   const [selectedVisit, setSelectedVisit] = useState<ErVisit | null>(null)
   const [showPrintModal, setShowPrintModal] = useState(false)
@@ -103,10 +118,12 @@ export function ErPage() {
   const { user: authUser, hasPermission } = useAuthStore()
   const canEditDelete = hasPermission('canEditDelete') || !!authUser?.email?.toLowerCase().includes('waseem') || !!authUser?.name?.toLowerCase().includes('waseem')
 
+  const isToday = selectedDate === todayString()
+
   const { data: visits = [], isLoading } = useQuery({
-    queryKey: ['er-visits-today'],
-    queryFn: fetchErVisits,
-    refetchInterval: 30_000,
+    queryKey: ['er-visits', selectedDate],
+    queryFn: () => fetchErVisitsByDate(selectedDate),
+    refetchInterval: isToday ? 30_000 : false,
   })
 
   const { data: doctors = [] } = useQuery({
@@ -206,13 +223,62 @@ export function ErPage() {
       return record
     },
     onSuccess: (record) => {
-      qc.invalidateQueries({ queryKey: ['er-visits-today'] })
+      qc.invalidateQueries({ queryKey: ['er-visits', todayString()] })
       setSelectedVisit(record as unknown as ErVisit)
       setPrintMoName(erMoName)
       setPrintFee(erFee)
       setPrintPatient(erSelectedPatient)
       setShowPrintModal(true)
       reset()
+
+      // Auto-create invoice if a fee was collected
+      if (erFee > 0) {
+        void (async () => {
+          try {
+            const online = useSyncStore.getState().isOnline && navigator.onLine
+            const invoiceNumber = await getNextInvoiceNumber()
+            const localId = generateUUID()
+            const inv = {
+              id: localId, local_id: localId, server_id: null as string | null,
+              patient_id: record.patient_id,
+              doctor_id: record.doctor_id ?? null,
+              visit_type: 'er' as const,
+              visit_ref_id: record.id,
+              items: [{ id: generateUUID(), invoice_id: localId, description: 'ER Registration Fee', quantity: 1, unit_price: erFee, total: erFee }],
+              subtotal: erFee, discount: 0, discount_type: 'amount' as const, tax: 0,
+              total: erFee, paid_amount: erFee,
+              payment_method: 'cash' as const, receipt_no: null,
+              status: 'paid' as const, invoice_number: invoiceNumber, notes: null,
+              created_at: new Date().toISOString(),
+              sync_status: 'pending' as const,
+            }
+            await db.invoices.add(inv)
+            qc.invalidateQueries({ queryKey: ['daily-collection'] })
+            qc.invalidateQueries({ queryKey: ['accounts-totals'] })
+            qc.invalidateQueries({ queryKey: ['dash-revenue'] })
+            if (online) {
+              try {
+                let serverPatientId = record.patient_id
+                const localPat = await db.patients.filter((p) => p.local_id === record.patient_id || p.server_id === record.patient_id).first()
+                if (localPat?.server_id) serverPatientId = localPat.server_id
+                const { data: saved, error } = await supabase.from('invoices').insert({
+                  patient_id: serverPatientId, doctor_id: inv.doctor_id,
+                  visit_type: inv.visit_type, visit_ref_id: inv.visit_ref_id,
+                  items: inv.items, subtotal: inv.subtotal, discount: inv.discount,
+                  discount_type: inv.discount_type, tax: inv.tax, total: inv.total,
+                  paid_amount: inv.paid_amount, payment_method: inv.payment_method,
+                  status: inv.status, invoice_number: inv.invoice_number,
+                  notes: inv.notes, created_at: inv.created_at,
+                }).select().single()
+                if (!error && saved) {
+                  await db.invoices.where('local_id').equals(localId).modify({ server_id: (saved as { id: string }).id, sync_status: 'synced' })
+                }
+              } catch { /* stay pending */ }
+            }
+          } catch { /* don't break UI if invoice fails */ }
+        })()
+      }
+
       setErFee(0)
       setErSelectedPatient(null)
       setErPatientSearch('')
@@ -240,7 +306,7 @@ export function ErPage() {
         await supabase.from('er_visits').update({ status }).eq('id', id)
       }
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['er-visits-today'] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['er-visits', selectedDate] }),
   })
 
   const deleteVisit = useMutation({
@@ -250,7 +316,7 @@ export function ErPage() {
         await supabase.from('er_visits').delete().eq('id', id)
       }
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['er-visits-today'] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['er-visits', selectedDate] }),
   })
 
   const handleDeleteVisit = (id: string) => {
@@ -262,15 +328,34 @@ export function ErPage() {
     <div>
       <PageHeader
         title="Emergency Department"
-        subtitle={`Today — ${formatDate(todayString())} | ${visits.length} ER visits`}
+        subtitle={`${formatDate(selectedDate)} | ${visits.length} ER visit${visits.length !== 1 ? 's' : ''}`}
         actions={
-          <button
-            onClick={() => setShowForm(true)}
-            className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-medium"
-          >
-            <Plus className="w-4 h-4" />
-            New ER Registration
-          </button>
+          <div className="flex items-center gap-2">
+            <input
+              type="date"
+              value={selectedDate}
+              max={todayString()}
+              onChange={(e) => setSelectedDate(e.target.value || todayString())}
+              className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+            />
+            {!isToday && (
+              <button
+                onClick={() => setSelectedDate(todayString())}
+                className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                Today
+              </button>
+            )}
+            {isToday && (
+              <button
+                onClick={() => setShowForm(true)}
+                className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-medium"
+              >
+                <Plus className="w-4 h-4" />
+                New ER Registration
+              </button>
+            )}
+          </div>
         }
       />
 
@@ -313,7 +398,7 @@ export function ErPage() {
               {visits.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="text-center py-12 text-gray-400">
-                    No ER visits today.
+                    {isToday ? 'No ER visits today.' : `No ER visits found for ${formatDate(selectedDate)}.`}
                   </td>
                 </tr>
               ) : (

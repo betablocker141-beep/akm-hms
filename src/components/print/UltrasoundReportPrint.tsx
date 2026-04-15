@@ -49,29 +49,9 @@ export function UltrasoundReportPrint({
   })
 
   const studyTitle = getStudyTitle(report.study_type)
-  const LR = '14mm'
-
-  /*
-   * LAYOUT STRATEGY
-   * ───────────────
-   * Outer wrapper: position:relative, height:297mm (exact A4), overflow:hidden
-   *   - Prevents content from spilling to page 2.
-   *
-   * Footer: position:absolute, bottom:0
-   *   - Pinned to page bottom regardless of flex/block browser behaviour in print.
-   *   - Does NOT depend on flex:1 expanding siblings.
-   *
-   * Content area: padding-bottom:24mm reserves space for the footer so
-   *   body text never slides under the absolutely-positioned footer.
-   *
-   * This approach avoids the "blank space below footer" problem that
-   * occurs when flex:1 body expansion fails in some browser print engines.
-   */
 
   return (
     <>
-      {/* @page must be in <head> for some browsers; the <style> here is
-          also copied into the react-to-print iframe and works in Chrome/Edge. */}
       <style dangerouslySetInnerHTML={{ __html: `
         @page { size: A4 portrait; margin: 0; }
         @media print {
@@ -80,126 +60,154 @@ export function UltrasoundReportPrint({
       `}} />
 
       <div
-        className="print-area"
+        className="print-area bg-white font-sans"
         style={{
           width: '210mm',
-          height: '297mm',
+          minHeight: '297mm',
           margin: '0 auto',
-          background: '#fff',
-          fontFamily: 'Arial, sans-serif',
-          fontSize: '10pt',
-          color: '#111',
+          padding: '14mm 16mm',
+          fontFamily: 'Inter, Arial, sans-serif',
+          fontSize: '11pt',
           boxSizing: 'border-box',
-          position: 'relative',
-          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
         }}
       >
 
-        {/* ── 1. Maroon top bar ───────────────────────────── */}
-        <div style={{ background: '#8B0000', height: '7px' }} />
-
-        {/* ── 2. Letterhead ─────────────────────────────────
-              Logo on left; hospital name + contact on right.
-              The row fills the full content width (210mm − 2×LR).
-        */}
+        {/* ── HEADER ── logo left | hospital name center | report label right ── */}
         <div style={{
           display: 'flex',
           alignItems: 'center',
-          padding: `6mm ${LR} 4mm ${LR}`,
-          gap: '14px',
-          width: '100%',
-          boxSizing: 'border-box',
+          gap: '16px',
+          borderBottom: '3px solid #8B0000',
+          paddingBottom: '12px',
+          marginBottom: '16px',
         }}>
-          <div style={{ flexShrink: 0 }}>
-            <AKMLogo size={72} />
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{
-              fontStyle: 'italic',
-              fontWeight: 'bold',
-              fontSize: '21pt',
-              lineHeight: 1.1,
-              color: '#8B0000',
-              marginBottom: '3px',
-            }}>
+          <AKMLogo size={56} />
+
+          <div style={{ flex: 1, textAlign: 'center' }}>
+            <h1 style={{ fontSize: '18pt', fontWeight: 700, color: '#8B0000', margin: 0, fontStyle: 'italic' }}>
               Alim Khatoon Medicare
-            </div>
-            <div style={{ fontSize: '8.5pt', color: '#444', lineHeight: 1.5 }}>
-              {hospitalAddress}
-            </div>
-            <div style={{ fontSize: '8.5pt', color: '#444', lineHeight: 1.5 }}>
-              Tel:&nbsp;{hospitalPhone}&nbsp;&nbsp;|&nbsp;&nbsp;Email:&nbsp;{hospitalEmail}
-            </div>
+            </h1>
+            <p style={{ fontSize: '9.5pt', color: '#555', margin: '2px 0 0' }}>{hospitalAddress}</p>
+            <p style={{ fontSize: '9.5pt', color: '#555', margin: 0 }}>
+              Tel: {hospitalPhone}&nbsp;&nbsp;|&nbsp;&nbsp;{hospitalEmail}
+            </p>
+          </div>
+
+          <div style={{ textAlign: 'right', minWidth: '110px' }}>
+            <h2 style={{ fontSize: '13pt', fontWeight: 700, color: '#8B0000', margin: 0 }}>
+              ULTRASOUND
+            </h2>
+            <h3 style={{ fontSize: '10pt', fontWeight: 600, color: '#8B0000', margin: '2px 0 0' }}>
+              REPORT
+            </h3>
+            <p style={{ fontSize: '9pt', color: '#666', margin: '4px 0 0' }}>
+              {formatDate(report.study_date)}
+            </p>
           </div>
         </div>
 
-        {/* ── 3. Double-rule separator ───────────────────── */}
-        <div style={{ padding: `0 ${LR}`, marginBottom: '4mm' }}>
-          <div style={{ borderTop: '3px solid #8B0000' }} />
-          <div style={{ borderTop: '1px solid #D4AF37', marginTop: '2px' }} />
-        </div>
-
-        {/* ── 4. Body content — padding-bottom reserves space for the
-              absolute footer (footer height ≈ 22mm) ─────────── */}
+        {/* ── PATIENT INFO + STUDY INFO ── */}
         <div style={{
-          padding: `0 ${LR}`,
-          paddingBottom: '24mm',
-          boxSizing: 'border-box',
+          display: 'flex',
+          gap: '32px',
+          marginBottom: '16px',
+          fontSize: '10pt',
+          padding: '10px 12px',
+          border: '1px solid #e5e7eb',
+          borderRadius: '4px',
+          backgroundColor: '#fafafa',
         }}>
+          {/* Left: patient details */}
+          <div style={{ flex: 1 }}>
+            <p style={{ fontWeight: 600, color: '#555', marginBottom: '5px', fontSize: '8.5pt', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              Patient
+            </p>
+            <p style={{ fontWeight: 700, color: '#111', margin: '0 0 2px' }}>
+              {patientName ?? '——————————————'}
+            </p>
+            {husbandsFatherName && (
+              <p style={{ color: '#555', margin: '0 0 2px' }}>
+                W/O – D/O – S/O: <strong>{husbandsFatherName}</strong>
+              </p>
+            )}
+            {patientMrn && (
+              <p style={{ color: '#555', margin: '0 0 2px' }}>
+                MRN: <strong style={{ color: '#8B0000' }}>{patientMrn}</strong>
+              </p>
+            )}
+            <p style={{ color: '#555', margin: '0 0 2px' }}>
+              Age / Gender:{' '}
+              <strong>{patientAge ?? '——'}</strong>
+            </p>
+            {patientPhone && (
+              <p style={{ color: '#555', margin: '0 0 2px' }}>Phone: <strong>{patientPhone}</strong></p>
+            )}
+            {patientAddress && (
+              <p style={{ color: '#555', margin: 0 }}>Address: {patientAddress}</p>
+            )}
+          </div>
 
-          {/* Patient info box */}
-          <div style={{
-            border: '1px solid #999',
-            padding: '5px 10px',
-            marginBottom: '6px',
-            fontSize: '9.5pt',
-            lineHeight: 1.55,
+          {/* Right: study details */}
+          <div style={{ textAlign: 'right', minWidth: '160px' }}>
+            <p style={{ fontWeight: 600, color: '#555', marginBottom: '5px', fontSize: '8.5pt', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              Study Details
+            </p>
+            <p style={{ color: '#555', margin: '0 0 2px' }}>
+              Date: <strong>{formatDate(report.study_date)}</strong>
+            </p>
+            {report.referring_doctor && (
+              <p style={{ color: '#555', margin: '0 0 2px' }}>
+                Ref. Doctor: <strong>{report.referring_doctor}</strong>
+              </p>
+            )}
+            {report.status === 'draft' && (
+              <p style={{ color: '#B45309', fontWeight: 700, margin: '4px 0 0', fontSize: '9pt' }}>
+                ⚠ DRAFT
+              </p>
+            )}
+          </div>
+        </div>
+
+        {/* ── STUDY TITLE ── */}
+        <div style={{ textAlign: 'center', margin: '6px 0 12px' }}>
+          <span style={{
+            fontWeight: 700,
+            textDecoration: 'underline',
+            fontSize: '12pt',
+            color: '#111',
+            letterSpacing: '0.02em',
           }}>
-            <div style={{ display: 'flex', gap: '20px' }}>
-              <div style={{ flex: 1 }}>
-                <div><strong>Name: </strong>{patientName ?? '——————————————————'}</div>
-                <div><strong>MR#: </strong>{patientMrn ?? '——————'}</div>
-                {husbandsFatherName && (
-                  <div><strong>W/O - D/O - S/O: </strong>{husbandsFatherName}</div>
-                )}
-                <div><strong>Age/Gender: </strong>{patientAge ?? '——— / ———'}</div>
-                {patientPhone   && <div><strong>Phone: </strong>{patientPhone}</div>}
-                {patientAddress && <div><strong>Address: </strong>{patientAddress}</div>}
-              </div>
-              <div style={{ minWidth: '140px', textAlign: 'right' }}>
-                <div><strong>Date: </strong>{formatDate(report.study_date)}</div>
-                {report.referring_doctor && (
-                  <div><strong>Doctor: </strong>{report.referring_doctor}</div>
-                )}
-              </div>
-            </div>
-            <div style={{ borderTop: '1px solid #ccc', marginTop: '4px' }} />
-          </div>
+            {studyTitle}
+          </span>
+        </div>
 
-          {/* Study title */}
-          <div style={{ textAlign: 'center', marginBottom: '7px' }}>
-            <span style={{ fontWeight: 'bold', textDecoration: 'underline', fontSize: '11pt' }}>
-              {studyTitle}
-            </span>
-          </div>
-
-          {/* Findings */}
+        {/* ── FINDINGS ── */}
+        <div style={{ flex: 1 }}>
           <div style={{
             whiteSpace: 'pre-wrap',
-            fontSize: '10pt',
-            lineHeight: 1.65,
-            marginBottom: '8px',
+            fontSize: '10.5pt',
+            lineHeight: 1.7,
+            color: '#1a1a1a',
+            marginBottom: '10px',
           }}>
             {report.findings}
           </div>
 
-          {/* Conclusion */}
+          {/* Impression / Conclusion */}
           {report.impression && (
-            <div style={{ marginBottom: '8px' }}>
-              <div style={{ fontWeight: 'bold', textDecoration: 'underline', fontSize: '10.5pt', marginBottom: '3px' }}>
+            <div style={{ marginBottom: '10px' }}>
+              <p style={{
+                fontWeight: 700,
+                textDecoration: 'underline',
+                fontSize: '10.5pt',
+                marginBottom: '4px',
+                color: '#111',
+              }}>
                 CONCLUSION
-              </div>
-              <div style={{ whiteSpace: 'pre-wrap', fontSize: '10pt', lineHeight: 1.6 }}>
+              </p>
+              <div style={{ whiteSpace: 'pre-wrap', fontSize: '10.5pt', lineHeight: 1.65, color: '#1a1a1a' }}>
                 {report.impression}
               </div>
             </div>
@@ -208,7 +216,7 @@ export function UltrasoundReportPrint({
           {/* History */}
           {report.history && (
             <div style={{ marginBottom: '6px', fontSize: '10pt' }}>
-              <strong>*History: </strong>
+              <strong>* History: </strong>
               <span style={{ whiteSpace: 'pre-wrap' }}>{report.history}</span>
             </div>
           )}
@@ -216,7 +224,7 @@ export function UltrasoundReportPrint({
           {/* Presenting complaints */}
           {report.presenting_complaints && (
             <div style={{ marginBottom: '6px', fontSize: '10pt' }}>
-              <strong>*Presenting Complaints: </strong>
+              <strong>* Presenting Complaints: </strong>
               <span style={{ whiteSpace: 'pre-wrap' }}>{report.presenting_complaints}</span>
             </div>
           )}
@@ -224,52 +232,60 @@ export function UltrasoundReportPrint({
           {/* Prescription */}
           {report.prescription && (
             <div style={{ marginBottom: '6px', fontSize: '10pt' }}>
-              <strong>*Prescription: </strong>
+              <strong>* Prescription: </strong>
               <span style={{ whiteSpace: 'pre-wrap' }}>{report.prescription}</span>
             </div>
           )}
 
-          {/* Signature */}
-          <div style={{ marginTop: '16px', marginBottom: '4px', fontSize: '10pt' }}>
-            <strong>Dr. Name: </strong>
-            <span style={{ borderBottom: '1px solid #555', paddingBottom: '1px', minWidth: '160px', display: 'inline-block' }}>
-              {radiologistName ?? ''}
-            </span>
+          {/* Signature row */}
+          <div style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            marginTop: '24px',
+            marginBottom: '6px',
+          }}>
+            <div style={{ textAlign: 'center', minWidth: '200px' }}>
+              <div style={{
+                borderBottom: '1.5px solid #555',
+                marginBottom: '4px',
+                paddingBottom: '2px',
+                minWidth: '180px',
+                fontSize: '10.5pt',
+                fontWeight: 600,
+                color: '#111',
+              }}>
+                {radiologistName ?? ''}
+              </div>
+              <p style={{ fontSize: '9pt', color: '#555', margin: 0 }}>Radiologist / Reporting Doctor</p>
+            </div>
           </div>
 
           {/* Printed by */}
           {printedBy && (
-            <div style={{ fontSize: '8pt', color: '#666', marginBottom: '2px' }}>
-              <strong>Printed By:</strong> {printedBy} &nbsp;({printDateTime})
+            <div style={{ fontSize: '8pt', color: '#888', textAlign: 'right' }}>
+              Printed by: {printedBy} &nbsp;({printDateTime})
             </div>
           )}
-
         </div>
 
-        {/* ── 5. Footer — position:absolute pins it to page bottom ──
-              This works even if flex:1 expansion fails in print engines.
-        */}
+        {/* ── FOOTER ── same as InvoicePrint ── */}
         <div style={{
-          position: 'absolute',
-          bottom: 0,
-          left: LR,
-          right: LR,
-          borderTop: '1px solid #8B0000',
-          paddingTop: '4px',
-          paddingBottom: '7mm',
+          borderTop: '1px solid #e5e7eb',
+          marginTop: '20px',
+          paddingTop: '10px',
           textAlign: 'center',
-          fontSize: '7.5pt',
-          color: '#666',
-          lineHeight: 1.5,
-          background: '#fff',
+          fontSize: '9pt',
+          color: '#888',
         }}>
-          <div>This report is not for medicolegal proceedings and not valid for any court of law.</div>
-          <div>Expert opinion from a Radiologist is required for medicolegal cases.</div>
-          {report.status === 'draft' && (
-            <div style={{ color: '#B45309', fontWeight: 700, marginTop: '3px' }}>
-              DRAFT — NOT FOR CLINICAL USE
-            </div>
-          )}
+          <p style={{ fontWeight: 600, color: '#8B0000', marginBottom: '3px' }}>
+            Thank you for choosing Alim Khatoon Medicare
+          </p>
+          <p style={{ margin: 0 }}>
+            {hospitalAddress} &nbsp;|&nbsp; Tel: {hospitalPhone} &nbsp;|&nbsp; {hospitalEmail}
+          </p>
+          <p style={{ margin: '4px 0 0', fontSize: '8pt', color: '#aaa' }}>
+            This report is not for medicolegal proceedings and not valid for any court of law.
+          </p>
         </div>
 
       </div>

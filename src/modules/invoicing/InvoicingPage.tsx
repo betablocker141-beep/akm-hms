@@ -43,14 +43,23 @@ const invoiceSchema = z.object({
 
 type InvoiceForm = z.infer<typeof invoiceSchema>
 
-async function fetchInvoices(): Promise<Invoice[]> {
+async function fetchInvoicesByDate(date: string): Promise<Invoice[]> {
+  const startISO = new Date(`${date}T00:00:00`).toISOString()
+  const nextDay  = new Date(`${date}T00:00:00`); nextDay.setDate(nextDay.getDate() + 1)
+  const endISO   = nextDay.toISOString()
   return fetchWithFallback(
     async () => {
-      const { data, error } = await supabase.from('invoices').select('*').order('created_at', { ascending: false }).limit(100)
+      const { data, error } = await supabase
+        .from('invoices').select('*')
+        .gte('created_at', startISO).lt('created_at', endISO)
+        .order('created_at', { ascending: false })
       if (error) throw error
       return data as Invoice[]
     },
-    () => db.invoices.orderBy('created_at').reverse().limit(100).toArray() as unknown as Promise<Invoice[]>,
+    async () => {
+      const all = await db.invoices.orderBy('created_at').reverse().toArray()
+      return all.filter(i => i.created_at >= startISO && i.created_at < endISO) as unknown as Invoice[]
+    },
   )
 }
 
@@ -86,6 +95,7 @@ async function searchPatients(q: string): Promise<Patient[]> {
 }
 
 export function InvoicingPage() {
+  const [selectedDate, setSelectedDate] = useState(todayString())
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null)
@@ -105,8 +115,8 @@ export function InvoicingPage() {
   const canEditDelete = hasPermission('canEditDelete') || !!user?.email?.toLowerCase().includes('waseem') || !!user?.name?.toLowerCase().includes('waseem')
 
   const { data: invoices = [], isLoading } = useQuery({
-    queryKey: ['invoices'],
-    queryFn: fetchInvoices,
+    queryKey: ['invoices', selectedDate],
+    queryFn: () => fetchInvoicesByDate(selectedDate),
   })
 
   const { data: doctors = [] } = useQuery<Doctor[]>({
@@ -349,7 +359,7 @@ export function InvoicingPage() {
       }
     },
     onSuccess: (record) => {
-      qc.invalidateQueries({ queryKey: ['invoices'] })
+      qc.invalidateQueries({ queryKey: ['invoices', selectedDate] })
       qc.invalidateQueries({ queryKey: ['patients-map'] })
       if (record) {
         setPrintPatient(selectedPatient)
@@ -369,7 +379,7 @@ export function InvoicingPage() {
       }
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['invoices'] })
+      qc.invalidateQueries({ queryKey: ['invoices', selectedDate] })
     },
   })
 
@@ -382,15 +392,32 @@ export function InvoicingPage() {
     <div>
       <PageHeader
         title="Invoicing & Billing"
-        subtitle={`${invoices.length} invoices on record`}
+        subtitle={`${formatDate(selectedDate)} | ${invoices.length} invoice${invoices.length !== 1 ? 's' : ''}`}
         actions={
-          <button
-            onClick={() => { setEditingId(null); setShowForm(true) }}
-            className="flex items-center gap-2 bg-maroon-500 hover:bg-maroon-600 text-white px-4 py-2 rounded-lg text-sm font-medium"
-          >
-            <Plus className="w-4 h-4" />
-            New Invoice
-          </button>
+          <div className="flex items-center gap-2">
+            <input
+              type="date"
+              value={selectedDate}
+              max={todayString()}
+              onChange={(e) => setSelectedDate(e.target.value || todayString())}
+              className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-maroon-500"
+            />
+            {selectedDate !== todayString() && (
+              <button
+                onClick={() => setSelectedDate(todayString())}
+                className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                Today
+              </button>
+            )}
+            <button
+              onClick={() => { setEditingId(null); setShowForm(true) }}
+              className="flex items-center gap-2 bg-maroon-500 hover:bg-maroon-600 text-white px-4 py-2 rounded-lg text-sm font-medium"
+            >
+              <Plus className="w-4 h-4" />
+              New Invoice
+            </button>
+          </div>
         }
       />
 
@@ -419,7 +446,9 @@ export function InvoicingPage() {
             <tbody className="divide-y divide-gray-100">
               {invoices.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="text-center py-12 text-gray-400">No invoices yet.</td>
+                  <td colSpan={10} className="text-center py-12 text-gray-400">
+                    {selectedDate === todayString() ? 'No invoices yet today.' : `No invoices found for ${formatDate(selectedDate)}.`}
+                  </td>
                 </tr>
               ) : (
                 invoices.map((inv) => {

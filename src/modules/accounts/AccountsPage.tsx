@@ -12,7 +12,7 @@ import { supabase } from '@/lib/supabase/client'
 import { db } from '@/lib/dexie/schema'
 import { formatCurrency, formatDate, todayString } from '@/lib/utils'
 import { fetchWithFallback } from '@/lib/utils/fetchWithFallback'
-import { fetchActiveDoctors } from '@/lib/utils/doctorUtils'
+import { fetchActiveDoctors, fetchAllDoctors } from '@/lib/utils/doctorUtils'
 import type { Doctor, Invoice, OpdToken, ErVisit, IpdAdmission } from '@/types'
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -76,31 +76,34 @@ async function fetchRevenueSummary(year: number): Promise<MonthlyRevenue[]> {
 
 async function fetchTotals() {
   const today = new Date()
-  const monthStart = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`
-  const { data: inv } = await supabase.from('invoices').select('total, paid_amount, status').gte('created_at', monthStart)
+  // Local-time month start so PKT records (UTC+5) are included correctly
+  const monthStartISO = new Date(today.getFullYear(), today.getMonth(), 1).toISOString()
+  const { data: inv } = await supabase.from('invoices').select('total, paid_amount, status').gte('created_at', monthStartISO)
   const monthRev = (inv ?? []).reduce((s, i) => s + (i.paid_amount ?? 0), 0)
   const outstanding = (inv ?? []).filter(i => i.status !== 'paid').reduce((s, i) => s + Math.max(0, i.total - i.paid_amount), 0)
-  const { count: opdCount } = await supabase.from('opd_tokens').select('*', { count: 'exact', head: true }).gte('created_at', monthStart)
-  const { count: erCount }  = await supabase.from('er_visits').select('*', { count: 'exact', head: true }).gte('created_at', monthStart)
-  const { count: ipdCount } = await supabase.from('ipd_admissions').select('*', { count: 'exact', head: true }).gte('created_at', monthStart)
+  const { count: opdCount } = await supabase.from('opd_tokens').select('*', { count: 'exact', head: true }).gte('created_at', monthStartISO)
+  const { count: erCount }  = await supabase.from('er_visits').select('*', { count: 'exact', head: true }).gte('created_at', monthStartISO)
+  const { count: ipdCount } = await supabase.from('ipd_admissions').select('*', { count: 'exact', head: true }).gte('created_at', monthStartISO)
   return { monthRev, outstanding, opdCount: opdCount ?? 0, erCount: erCount ?? 0, ipdCount: ipdCount ?? 0 }
 }
 
 async function fetchDailyInvoices(date: string): Promise<Invoice[]> {
-  const next = new Date(date); next.setDate(next.getDate() + 1)
-  const nextStr = next.toISOString().substring(0, 10)
+  // Use local-time midnight so PKT invoices (UTC+5) are not shifted to wrong day
+  const startISO = new Date(`${date}T00:00:00`).toISOString()
+  const nextDay  = new Date(`${date}T00:00:00`); nextDay.setDate(nextDay.getDate() + 1)
+  const endISO   = nextDay.toISOString()
   return fetchWithFallback(
     async () => {
       const { data, error } = await supabase
         .from('invoices').select('*')
-        .gte('created_at', date).lt('created_at', nextStr)
+        .gte('created_at', startISO).lt('created_at', endISO)
         .order('created_at')
       if (error) throw error
       return (data ?? []) as Invoice[]
     },
     async () => {
       const all = await db.invoices.orderBy('created_at').toArray()
-      return all.filter(i => i.created_at.startsWith(date)) as unknown as Invoice[]
+      return all.filter(i => i.created_at >= startISO && i.created_at < endISO) as unknown as Invoice[]
     },
   )
 }
@@ -122,19 +125,22 @@ async function fetchPatientNames(patientIds: string[]): Promise<Record<string, s
 }
 
 async function fetchMonthInvoices(month: number, year: number): Promise<Invoice[]> {
-  const start = `${year}-${String(month).padStart(2, '0')}-01`
-  const next = month === 12 ? `${year + 1}-01-01` : `${year}-${String(month + 1).padStart(2, '0')}-01`
+  // Local-time boundaries so PKT invoices are not shifted to wrong month
+  const startISO = new Date(year, month - 1, 1).toISOString()
+  const endISO   = month === 12
+    ? new Date(year + 1, 0, 1).toISOString()
+    : new Date(year, month, 1).toISOString()
   return fetchWithFallback(
     async () => {
       const { data, error } = await supabase
         .from('invoices').select('patient_id, doctor_id, visit_type, paid_amount, total, created_at')
-        .gte('created_at', start).lt('created_at', next)
+        .gte('created_at', startISO).lt('created_at', endISO)
       if (error) throw error
       return (data ?? []) as Invoice[]
     },
     async () => {
       const all = await db.invoices.orderBy('created_at').toArray()
-      return all.filter(i => i.created_at >= start && i.created_at < next) as unknown as Invoice[]
+      return all.filter(i => i.created_at >= startISO && i.created_at < endISO) as unknown as Invoice[]
     },
   )
 }
@@ -203,10 +209,14 @@ function computeEarnings(
   opdTokens: OpdToken[],
   erVisits: ErVisit[],
   ipdAdmissions: IpdAdmission[],
-  doctors: Doctor[],
+  allDoctors: Doctor[],          // ALL doctors (active + inactive) so no invoice is dropped
   paidSet: Set<string>,
 ): ComputedEarning[] {
-  // Fallback cross-table maps for invoices that pre-date the doctor_id column
+  // Doctor lookup by id — covers active AND inactive so cross-table IDs always resolve
+  const doctorById = new Map<string, Doctor>()
+  allDoctors.forEach(d => doctorById.set(d.id, d))
+
+  // Cross-table maps (fallback for invoices without doctor_id)
   const opdMap = new Map<string, string>()
   opdTokens.forEach(t => {
     if (t.doctor_id) {
@@ -217,7 +227,6 @@ function computeEarnings(
   const erMap = new Map<string, string>()
   erVisits.forEach(v => {
     if (v.doctor_id) {
-      // Index by both UTC date and local-adjacent dates to handle timezone edge cases
       erMap.set(`${v.patient_id}:${v.visit_date}`, v.doctor_id)
     }
   })
@@ -227,19 +236,21 @@ function computeEarnings(
     if (a.admitting_doctor_id) ipdMap.set(a.patient_id, a.admitting_doctor_id)
   })
 
+  // Dynamic totals — initialised lazily so ANY docId found in data is counted
   const totals = new Map<string, { opd: number; er: number; ipd: number; us: number }>()
-  doctors.forEach(d => totals.set(d.id, { opd: 0, er: 0, ipd: 0, us: 0 }))
+  const ensureEntry = (id: string) => {
+    if (!totals.has(id)) totals.set(id, { opd: 0, er: 0, ipd: 0, us: 0 })
+  }
 
   invoices.forEach(inv => {
     const amount = inv.paid_amount > 0 ? inv.paid_amount : (inv.total ?? 0)
 
-    // Primary: use doctor_id stored directly on the invoice
+    // Primary: doctor_id stored on the invoice itself
     let docId: string | undefined = (inv as Invoice & { doctor_id?: string | null }).doctor_id ?? undefined
 
-    // Fallback: cross-table lookup for invoices without doctor_id (older records)
+    // Fallback: cross-table lookup (handles older records without doctor_id on invoice)
     if (!docId) {
       const dateUtc  = inv.created_at.substring(0, 10)
-      // Also try the day before/after to handle Pakistan UTC+5 offset edge cases
       const datePrev = new Date(new Date(dateUtc).getTime() + 86400000).toISOString().substring(0, 10)
 
       if (inv.visit_type === 'opd') {
@@ -253,8 +264,10 @@ function computeEarnings(
       }
     }
 
-    if (!docId || !totals.has(docId)) return
+    // Skip if still no docId OR doctor is completely unknown (not in any doctor list)
+    if (!docId || !doctorById.has(docId)) return
 
+    ensureEntry(docId)
     const b = totals.get(docId)!
     if      (inv.visit_type === 'opd') b.opd += amount
     else if (inv.visit_type === 'er')  b.er  += amount
@@ -262,13 +275,14 @@ function computeEarnings(
     else if (inv.visit_type === 'us')  b.us  += amount
   })
 
-  return doctors
-    .map(d => {
-      const t = totals.get(d.id)!
+  return [...totals.entries()]
+    .map(([docId, t]) => {
+      const doctor = doctorById.get(docId)!
       const gross = t.opd + t.er + t.ipd + t.us
-      return { doctor: d, total_opd: t.opd, total_er: t.er, total_ipd: t.ipd, total_us: t.us, gross, share_amount: Math.round(gross * d.share_percent / 100), paid: paidSet.has(d.id) }
+      return { doctor, total_opd: t.opd, total_er: t.er, total_ipd: t.ipd, total_us: t.us, gross, share_amount: Math.round(gross * doctor.share_percent / 100), paid: paidSet.has(docId) }
     })
     .filter(e => e.gross > 0)
+    .sort((a, b) => b.gross - a.gross)
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -285,8 +299,9 @@ export function AccountsPage() {
     documentTitle: `Daily-Collection-${dailyDate}`,
   })
 
-  const { data: doctors = [] } = useQuery({ queryKey: ['doctors-active'], queryFn: fetchActiveDoctors })
-  const { data: totals }       = useQuery({ queryKey: ['accounts-totals'], queryFn: fetchTotals })
+  const { data: doctors = [] }    = useQuery({ queryKey: ['doctors-active'], queryFn: fetchActiveDoctors })
+  const { data: allDoctors = [] } = useQuery({ queryKey: ['doctors-all'],    queryFn: fetchAllDoctors })
+  const { data: totals }          = useQuery({ queryKey: ['accounts-totals'], queryFn: fetchTotals })
 
   const { data: revenue = [], isLoading: loadingRev } = useQuery({
     queryKey: ['revenue-monthly', selectedYear],
@@ -317,8 +332,8 @@ export function AccountsPage() {
   const loadingEarnings = loadingMI || loadingOPD
 
   const earnings = useMemo(
-    () => computeEarnings(monthInvoices, monthOpdTokens, monthErVisits, ipdAdmissions, doctors, paidSet),
-    [monthInvoices, monthOpdTokens, monthErVisits, ipdAdmissions, doctors, paidSet],
+    () => computeEarnings(monthInvoices, monthOpdTokens, monthErVisits, ipdAdmissions, allDoctors, paidSet),
+    [monthInvoices, monthOpdTokens, monthErVisits, ipdAdmissions, allDoctors, paidSet],
   )
 
   const markPaid = useMutation({
@@ -351,6 +366,28 @@ export function AccountsPage() {
   const dailyPending    = Math.max(0, dailyTotal - dailyCollected)
   const dailyByType     = dailyInvoices.reduce<Record<string, number>>((a, i) => { a[i.visit_type] = (a[i.visit_type] ?? 0) + (i.paid_amount ?? 0); return a }, {})
   const dailyByMethod   = dailyInvoices.reduce<Record<string, number>>((a, i) => { const m = i.payment_method ?? 'cash'; a[m] = (a[m] ?? 0) + (i.paid_amount ?? 0); return a }, {})
+
+  // Doctor lookup map for daily collection
+  const doctorMap = useMemo(
+    () => new Map(doctors.map(d => [d.id, d])),
+    [doctors],
+  )
+
+  // Daily doctor share breakdown
+  const dailyDoctorShares = useMemo(() => {
+    const map = new Map<string, { doctor: Doctor; share: number }>()
+    dailyInvoices.forEach(inv => {
+      const docId = (inv as Invoice & { doctor_id?: string | null }).doctor_id
+      if (!docId) return
+      const doc = doctorMap.get(docId)
+      if (!doc) return
+      const share = Math.round((inv.paid_amount ?? 0) * doc.share_percent / 100)
+      if (share === 0) return
+      const existing = map.get(docId)
+      if (existing) { existing.share += share } else { map.set(docId, { doctor: doc, share }) }
+    })
+    return [...map.values()].sort((a, b) => b.share - a.share)
+  }, [dailyInvoices, doctorMap])
 
   const totalRevenue = revenue.reduce((s, r) => s + r.opd + r.er + r.ipd + r.us, 0)
   const earningsTotal = earnings.reduce((s, e) => s + e.share_amount, 0)
@@ -462,7 +499,7 @@ export function AccountsPage() {
                 <p className="text-center py-8 text-gray-400">No invoices found for {formatDate(dailyDate)}.</p>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full text-sm min-w-[650px]">
+                  <table className="w-full text-sm min-w-[750px]">
                     <thead className="bg-gray-50 border-b border-gray-200 print:bg-gray-100">
                       <tr>
                         <th className="text-left px-3 py-2.5 font-medium text-gray-600">#</th>
@@ -473,12 +510,17 @@ export function AccountsPage() {
                         <th className="text-right px-3 py-2.5 font-medium text-gray-600">Paid</th>
                         <th className="text-right px-3 py-2.5 font-medium text-gray-600 print:hidden">Balance</th>
                         <th className="text-left px-3 py-2.5 font-medium text-gray-600">Method</th>
+                        <th className="text-left px-3 py-2.5 font-medium text-gray-600">Doctor</th>
+                        <th className="text-right px-3 py-2.5 font-medium text-gray-600">Dr Share</th>
                         <th className="text-left px-3 py-2.5 font-medium text-gray-600">Time</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
                       {dailyInvoices.map((inv, idx) => {
                         const bal = (inv.total ?? 0) - (inv.paid_amount ?? 0)
+                        const docId = (inv as Invoice & { doctor_id?: string | null }).doctor_id
+                        const doc = docId ? doctorMap.get(docId) : undefined
+                        const drShare = doc ? Math.round((inv.paid_amount ?? 0) * doc.share_percent / 100) : 0
                         return (
                           <tr key={inv.id} className="hover:bg-gray-50">
                             <td className="px-3 py-2.5 text-gray-400 text-xs">{idx + 1}</td>
@@ -499,6 +541,14 @@ export function AccountsPage() {
                             <td className="px-3 py-2.5 text-xs text-gray-500 capitalize">
                               {PAYMENT_LABELS[inv.payment_method ?? ''] ?? inv.payment_method ?? '—'}
                             </td>
+                            <td className="px-3 py-2.5 text-xs text-gray-600">
+                              {doc ? (
+                                <span title={`${doc.share_percent}% share`}>{doc.name.split(' ').slice(0, 2).join(' ')}</span>
+                              ) : '—'}
+                            </td>
+                            <td className="px-3 py-2.5 text-right text-xs font-medium text-maroon-600">
+                              {drShare > 0 ? formatCurrency(drShare) : '—'}
+                            </td>
                             <td className="px-3 py-2.5 text-xs text-gray-400">
                               {new Date(inv.created_at).toLocaleTimeString('en-PK', { hour: '2-digit', minute: '2-digit', hour12: true })}
                             </td>
@@ -514,10 +564,34 @@ export function AccountsPage() {
                         <td className={`px-3 py-2.5 text-right print:hidden ${dailyPending > 0 ? 'text-red-600' : 'text-gray-400'}`}>
                           {dailyPending > 0 ? formatCurrency(dailyPending) : '—'}
                         </td>
-                        <td colSpan={2} />
+                        <td className="px-3 py-2.5" />
+                        <td className="px-3 py-2.5" />
+                        <td className="px-3 py-2.5 text-right text-maroon-600">
+                          {formatCurrency(dailyDoctorShares.reduce((s, e) => s + e.share, 0))}
+                        </td>
+                        <td />
                       </tr>
                     </tfoot>
                   </table>
+                </div>
+              )}
+
+              {/* Daily doctor share summary */}
+              {dailyDoctorShares.length > 0 && (
+                <div className="mt-4 p-4 bg-maroon-50 border border-maroon-200 rounded-lg">
+                  <p className="text-xs font-semibold text-maroon-700 mb-2 uppercase tracking-wide">Doctor Share Breakdown — {formatDate(dailyDate)}</p>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+                    {dailyDoctorShares.map(({ doctor, share }) => (
+                      <div key={doctor.id} className="flex justify-between items-center bg-white border border-maroon-100 rounded px-3 py-1.5 text-xs">
+                        <span className="text-gray-700 font-medium truncate mr-2">{doctor.name.split(' ').slice(0, 2).join(' ')}</span>
+                        <span className="text-maroon-600 font-bold whitespace-nowrap">{formatCurrency(share)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-xs text-maroon-500 mt-2">
+                    Total doctor payouts today: <strong>{formatCurrency(dailyDoctorShares.reduce((s, e) => s + e.share, 0))}</strong>
+                    &nbsp;— Based on each doctor's share % applied to their linked invoices.
+                  </p>
                 </div>
               )}
 
@@ -528,6 +602,13 @@ export function AccountsPage() {
                     <span key={m}>{PAYMENT_LABELS[m] ?? m}: {formatCurrency(a)}</span>
                   ))}
                 </div>
+                {dailyDoctorShares.length > 0 && (
+                  <div className="flex justify-center gap-4 mb-2 text-xs">
+                    {dailyDoctorShares.map(({ doctor, share }) => (
+                      <span key={doctor.id}>{doctor.name.split(' ').slice(0, 2).join(' ')}: {formatCurrency(share)}</span>
+                    ))}
+                  </div>
+                )}
                 Printed: {new Date().toLocaleString('en-PK')} · AKM Hospital Management System
               </div>
             </div>

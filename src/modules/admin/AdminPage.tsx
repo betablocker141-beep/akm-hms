@@ -91,13 +91,15 @@ export function AdminPage() {
   const { data: collectionData = [], isLoading: collectionLoading } = useQuery<CollectionRow[]>({
     queryKey: ['daily-collection', reportDate],
     queryFn: async () => {
-      const dayStart = `${reportDate}T00:00:00.000Z`
-      const dayEnd   = `${reportDate}T23:59:59.999Z`
+      // Local-time boundaries so PKT records (UTC+5) are not shifted to wrong day
+      const dayStart = new Date(`${reportDate}T00:00:00`).toISOString()
+      const dayNext  = new Date(`${reportDate}T00:00:00`); dayNext.setDate(dayNext.getDate() + 1)
+      const dayEnd   = dayNext.toISOString()
       const { data, error } = await supabase
         .from('invoices')
         .select('created_by_name, paid_amount')
         .gte('created_at', dayStart)
-        .lte('created_at', dayEnd)
+        .lt('created_at', dayEnd)
       if (error) throw error
       // Group by created_by_name
       const map = new Map<string, CollectionRow>()

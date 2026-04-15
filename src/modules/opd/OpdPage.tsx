@@ -12,7 +12,7 @@ import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
 import { OpdTokenPrint } from '@/components/print/OpdTokenPrint'
 import { supabase } from '@/lib/supabase/client'
 import { db } from '@/lib/dexie/schema'
-import { generateUUID, formatDate, todayString } from '@/lib/utils'
+import { generateUUID, formatDate, todayString, padNumber } from '@/lib/utils'
 import { fetchWithFallback } from '@/lib/utils/fetchWithFallback'
 import { useSyncStore } from '@/store/syncStore'
 import { useAuthStore } from '@/store/authStore'
@@ -47,25 +47,20 @@ function getCurrentTime24h(): string {
   })
 }
 
-async function fetchTodayTokens(): Promise<OpdToken[]> {
-  const today = todayString()
-  // Always load Dexie first — it has everything (synced + pending).
-  // Then overlay any Supabase records that may not be in Dexie yet.
+async function fetchTokensByDate(date: string): Promise<OpdToken[]> {
   const dexieTokens = await db.opd_tokens
-    .where('date').equals(today)
+    .where('date').equals(date)
     .reverse().toArray() as unknown as OpdToken[]
 
   if (!navigator.onLine) return dexieTokens
 
   try {
     const { data, error } = await Promise.race([
-      supabase.from('opd_tokens').select('*').eq('date', today).order('created_at', { ascending: false }),
+      supabase.from('opd_tokens').select('*').eq('date', date).order('created_at', { ascending: false }),
       new Promise<never>((_, r) => setTimeout(() => r(new Error('timeout')), 3000)),
     ]) as { data: OpdToken[] | null; error: unknown }
     if (error || !data) return dexieTokens
 
-    // Merge: start with Supabase records, then add any Dexie-only records
-    // (those whose server_id is null — not yet synced).
     const supabaseIds = new Set(data.map((t) => t.id))
     const dexieOnly = dexieTokens.filter(
       (t) => !(t as unknown as { server_id: string | null }).server_id ||
@@ -98,6 +93,21 @@ async function fetchDoctors(): Promise<Doctor[]> {
   )
 }
 
+async function getNextInvoiceNumber(): Promise<string> {
+  const year = new Date().getFullYear()
+  const count = await db.invoices.count()
+  const localNumber = `INV-${year}-${padNumber(count + 1, 4)}`
+  if (!navigator.onLine) return localNumber
+  try {
+    const { data } = await Promise.race([
+      supabase.rpc('get_next_invoice_number'),
+      new Promise<never>((_, r) => setTimeout(() => r(new Error('timeout')), 3000)),
+    ]) as { data: string | null }
+    if (data) return data as string
+  } catch { /* use local */ }
+  return localNumber
+}
+
 async function fetchPatients(search: string): Promise<Patient[]> {
   if (!search || search.length < 2) return []
   const dexieFallback = async () => {
@@ -118,6 +128,7 @@ async function fetchPatients(search: string): Promise<Patient[]> {
 }
 
 export function OpdPage() {
+  const [selectedDate, setSelectedDate] = useState(todayString())
   const [showForm, setShowForm] = useState(false)
   const [patientSearch, setPatientSearch] = useState('')
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null)
@@ -132,10 +143,12 @@ export function OpdPage() {
   const { user: authUser, hasPermission } = useAuthStore()
   const canEditDelete = hasPermission('canEditDelete') || !!authUser?.email?.toLowerCase().includes('waseem') || !!authUser?.name?.toLowerCase().includes('waseem')
 
+  const isToday = selectedDate === todayString()
+
   const { data: tokens = [], isLoading } = useQuery({
-    queryKey: ['opd-tokens-today'],
-    queryFn: fetchTodayTokens,
-    refetchInterval: 30_000,
+    queryKey: ['opd-tokens', selectedDate],
+    queryFn: () => fetchTokensByDate(selectedDate),
+    refetchInterval: isToday ? 30_000 : false,
   })
 
   const { data: doctors = [] } = useQuery({
@@ -268,16 +281,62 @@ export function OpdPage() {
     onSuccess: (record) => {
       // Insert directly into cache — avoids race condition where Supabase
       // refetch runs before the fire-and-forget insert has completed.
-      qc.setQueryData<OpdToken[]>(['opd-tokens-today'], (old = []) => [
-        record as unknown as OpdToken,
-        ...old,
-      ])
+      qc.invalidateQueries({ queryKey: ['opd-tokens', todayString()] })
       // Save patient & fee BEFORE clearing them — needed for print
       setPrintPatient(selectedPatient)
       setPrintFee(opdFee)
       setSelectedToken(record as unknown as OpdToken)
       setShowPrintModal(true)
       reset()
+
+      // Auto-create invoice if a fee was collected
+      if (opdFee > 0) {
+        void (async () => {
+          try {
+            const online = useSyncStore.getState().isOnline && navigator.onLine
+            const invoiceNumber = await getNextInvoiceNumber()
+            const localId = generateUUID()
+            const inv = {
+              id: localId, local_id: localId, server_id: null as string | null,
+              patient_id: record.patient_id,
+              doctor_id: record.doctor_id,
+              visit_type: 'opd' as const,
+              visit_ref_id: record.id,
+              items: [{ id: generateUUID(), invoice_id: localId, description: 'OPD Consultation Fee', quantity: 1, unit_price: opdFee, total: opdFee }],
+              subtotal: opdFee, discount: 0, discount_type: 'amount' as const, tax: 0,
+              total: opdFee, paid_amount: opdFee,
+              payment_method: 'cash' as const, receipt_no: null,
+              status: 'paid' as const, invoice_number: invoiceNumber, notes: null,
+              created_at: new Date().toISOString(),
+              sync_status: 'pending' as const,
+            }
+            await db.invoices.add(inv)
+            qc.invalidateQueries({ queryKey: ['daily-collection'] })
+            qc.invalidateQueries({ queryKey: ['accounts-totals'] })
+            qc.invalidateQueries({ queryKey: ['dash-revenue'] })
+            if (online) {
+              try {
+                let serverPatientId = record.patient_id
+                const localPat = await db.patients.filter((p) => p.local_id === record.patient_id || p.server_id === record.patient_id).first()
+                if (localPat?.server_id) serverPatientId = localPat.server_id
+                const { data: saved, error } = await supabase.from('invoices').insert({
+                  patient_id: serverPatientId, doctor_id: inv.doctor_id,
+                  visit_type: inv.visit_type, visit_ref_id: inv.visit_ref_id,
+                  items: inv.items, subtotal: inv.subtotal, discount: inv.discount,
+                  discount_type: inv.discount_type, tax: inv.tax, total: inv.total,
+                  paid_amount: inv.paid_amount, payment_method: inv.payment_method,
+                  status: inv.status, invoice_number: inv.invoice_number,
+                  notes: inv.notes, created_at: inv.created_at,
+                }).select().single()
+                if (!error && saved) {
+                  await db.invoices.where('local_id').equals(localId).modify({ server_id: (saved as { id: string }).id, sync_status: 'synced' })
+                }
+              } catch { /* stay pending */ }
+            }
+          } catch { /* don't break UI if invoice fails */ }
+        })()
+      }
+
       setOpdFee(0)
       setShowForm(false)
       setSelectedPatient(null)
@@ -294,7 +353,7 @@ export function OpdPage() {
         await supabase.from('opd_tokens').update({ status }).eq('id', id)
       }
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['opd-tokens-today'] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['opd-tokens', selectedDate] }),
   })
 
   const deleteToken = useMutation({
@@ -304,7 +363,7 @@ export function OpdPage() {
         await supabase.from('opd_tokens').delete().eq('id', id)
       }
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['opd-tokens-today'] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['opd-tokens', selectedDate] }),
   })
 
   const handleDeleteToken = (id: string) => {
@@ -321,9 +380,24 @@ export function OpdPage() {
     <div>
       <PageHeader
         title="OPD Token Management"
-        subtitle={`Today — ${formatDate(todayString())} | ${tokens.length} tokens issued`}
+        subtitle={`${formatDate(selectedDate)} | ${tokens.length} token${tokens.length !== 1 ? 's' : ''} issued`}
         actions={
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
+            <input
+              type="date"
+              value={selectedDate}
+              max={todayString()}
+              onChange={(e) => setSelectedDate(e.target.value || todayString())}
+              className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-maroon-500"
+            />
+            {!isToday && (
+              <button
+                onClick={() => setSelectedDate(todayString())}
+                className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                Today
+              </button>
+            )}
             <a
               href="/opd/queue"
               target="_blank"
@@ -333,13 +407,15 @@ export function OpdPage() {
               <Eye className="w-4 h-4" />
               Queue Display
             </a>
-            <button
-              onClick={openForm}
-              className="flex items-center gap-2 bg-maroon-500 hover:bg-maroon-600 text-white px-4 py-2 rounded-lg text-sm font-medium"
-            >
-              <Plus className="w-4 h-4" />
-              New Token
-            </button>
+            {isToday && (
+              <button
+                onClick={openForm}
+                className="flex items-center gap-2 bg-maroon-500 hover:bg-maroon-600 text-white px-4 py-2 rounded-lg text-sm font-medium"
+              >
+                <Plus className="w-4 h-4" />
+                New Token
+              </button>
+            )}
           </div>
         }
       />
@@ -366,7 +442,7 @@ export function OpdPage() {
               {tokens.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="text-center py-12 text-gray-400">
-                    No tokens issued today. Click "New Token" to start.
+                    {isToday ? 'No tokens issued today. Click "New Token" to start.' : `No tokens found for ${formatDate(selectedDate)}.`}
                   </td>
                 </tr>
               ) : (

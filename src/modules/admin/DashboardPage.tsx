@@ -143,8 +143,10 @@ export function DashboardPage() {
   const { data: revenueStats } = useQuery({
     queryKey: ['dash-revenue', today],
     queryFn: async () => {
-      const dayStart = `${today}T00:00:00.000Z`
-      const dayEnd   = `${today}T23:59:59.999Z`
+      // Local-time boundaries so PKT records (UTC+5) are not shifted to wrong day
+      const dayStart = new Date(`${today}T00:00:00`).toISOString()
+      const dayNext  = new Date(`${today}T00:00:00`); dayNext.setDate(dayNext.getDate() + 1)
+      const dayEnd   = dayNext.toISOString()
       if (!isOnline) {
         const all = await db.invoices.where('created_at').between(dayStart, dayEnd).toArray()
         const total = all.reduce((s, i) => s + Number((i as any).paid_amount ?? 0), 0)
@@ -154,7 +156,7 @@ export function DashboardPage() {
         .from('invoices')
         .select('paid_amount')
         .gte('created_at', dayStart)
-        .lte('created_at', dayEnd)
+        .lt('created_at', dayEnd)
       const total = data?.reduce((s, i) => s + Number(i.paid_amount ?? 0), 0) ?? 0
       return { total, count: data?.length ?? 0 }
     },
@@ -166,7 +168,8 @@ export function DashboardPage() {
     queryKey: ['dash-month-revenue'],
     queryFn: async () => {
       const now = new Date()
-      const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01T00:00:00.000Z`
+      // Local-time month start so PKT records are not shifted to wrong month
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
       if (!isOnline) {
         const all = await db.invoices.where('created_at').aboveOrEqual(monthStart).toArray()
         return all.reduce((s, i) => s + Number((i as any).paid_amount ?? 0), 0)
