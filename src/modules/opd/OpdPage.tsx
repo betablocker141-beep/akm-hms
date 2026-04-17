@@ -61,10 +61,15 @@ async function fetchTokensByDate(date: string): Promise<OpdToken[]> {
     if (error || !data) return dexieTokens
 
     const supabaseIds = new Set(data.map((t) => t.id))
-    const dexieOnly = dexieTokens.filter(
-      (t) => !(t as unknown as { server_id: string | null }).server_id ||
-              !supabaseIds.has((t as unknown as { server_id: string }).server_id)
-    )
+    const supabaseCreatedAts = new Set(data.map((t) => t.created_at).filter(Boolean))
+    const dexieOnly = dexieTokens.filter((t) => {
+      const rec = t as unknown as { server_id: string | null; created_at: string }
+      // Already synced — Supabase is authoritative
+      if (rec.server_id && supabaseIds.has(rec.server_id)) return false
+      // Race condition: sync pushed to Supabase but Dexie server_id not yet updated
+      if (rec.created_at && supabaseCreatedAts.has(rec.created_at)) return false
+      return true
+    })
     return [...dexieOnly, ...data]
   } catch {
     return dexieTokens
