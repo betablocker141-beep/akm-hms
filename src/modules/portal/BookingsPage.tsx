@@ -4,7 +4,7 @@
  */
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Check, X, MessageCircle } from 'lucide-react'
+import { Check, X, MessageCircle, Copy, ExternalLink } from 'lucide-react'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { StatusBadge } from '@/components/shared/StatusBadge'
 import { WAButton } from '@/components/shared/WAButton'
@@ -84,6 +84,15 @@ export function BookingsPage() {
   })
 
   const pendingCount = bookings.filter((b) => b.status === 'pending').length
+  const bookingUrl = `${window.location.origin}/book-appointment`
+  const [copied, setCopied] = useState(false)
+
+  const copyLink = () => {
+    navigator.clipboard.writeText(bookingUrl).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
 
   return (
     <div>
@@ -91,6 +100,34 @@ export function BookingsPage() {
         title="Online Bookings"
         subtitle={pendingCount > 0 ? `${pendingCount} pending approval` : 'No pending bookings'}
       />
+
+      {/* Patient booking link card */}
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6 flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <p className="text-sm font-semibold text-blue-800 mb-1 flex items-center gap-1.5">
+            <Link className="w-4 h-4" /> Patient Booking Link
+          </p>
+          <p className="text-xs text-blue-600 mb-2">Share this URL with patients to book appointments online.</p>
+          <code className="text-xs font-mono text-blue-700 bg-blue-100 px-2 py-1 rounded">{bookingUrl}</code>
+        </div>
+        <div className="flex gap-2 flex-shrink-0">
+          <button
+            onClick={copyLink}
+            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+          >
+            <Copy className="w-4 h-4" />
+            {copied ? 'Copied!' : 'Copy Link'}
+          </button>
+          <a
+            href={bookingUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 border border-blue-300 text-blue-700 hover:bg-blue-100 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+          >
+            <ExternalLink className="w-4 h-4" /> Preview
+          </a>
+        </div>
+      </div>
 
       {/* Filter tabs */}
       <div className="flex gap-2 mb-6">

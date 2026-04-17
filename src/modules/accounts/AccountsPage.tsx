@@ -1,6 +1,5 @@
 import { useState, useRef, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useReactToPrint } from 'react-to-print'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts'
@@ -320,10 +319,19 @@ export function AccountsPage() {
   const qc = useQueryClient()
   const printRef = useRef<HTMLDivElement>(null)
 
-  const handlePrint = useReactToPrint({
-    content: () => printRef.current,
-    documentTitle: `Daily-Collection-${dailyDate}`,
-  })
+  const handlePrint = () => {
+    if (!printRef.current) return
+    const cssLinks = Array.from(document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]'))
+      .map(l => `<link rel="stylesheet" href="${l.href}">`)
+      .join('')
+    const html = printRef.current.innerHTML
+    const win = window.open('', '_blank', 'width=860,height=1100')
+    if (!win) return
+    win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Daily-Collection-${dailyDate}</title>${cssLinks}<style>@page{size:A4 portrait;margin:10mm}body{padding:8px;background:#fff}@media print{body *{visibility:visible!important}}</style></head><body>${html}</body></html>`)
+    win.document.close()
+    win.focus()
+    setTimeout(() => { win.print(); win.close() }, 800)
+  }
 
   const { data: doctors = [] }    = useQuery({ queryKey: ['doctors-active'], queryFn: fetchActiveDoctors })
   const { data: allDoctors = [] } = useQuery({ queryKey: ['doctors-all'],    queryFn: fetchAllDoctors })
@@ -748,6 +756,39 @@ export function AccountsPage() {
               Printed: {new Date().toLocaleString('en-PK')} · AKM Hospital Management System
             </div>
           </div>
+        )}
+      </div>
+
+      {/* ── Daily Doctor Earnings (standalone screen card) ───────────────── */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6 mb-8">
+        <h3 className="font-semibold text-gray-800 flex items-center gap-2 mb-4">
+          <CalendarDays className="w-4 h-4 text-maroon-500" />
+          Daily Doctor Earnings — {formatDate(dailyDate)}
+        </h3>
+        {loadingDaily ? (
+          <div className="flex justify-center py-4"><LoadingSpinner /></div>
+        ) : dailyDoctorShares.length === 0 ? (
+          <p className="text-sm text-gray-400 text-center py-4">
+            No invoices with linked doctors found for {formatDate(dailyDate)}.
+          </p>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-3">
+              {dailyDoctorShares.map(({ doctor, share }) => (
+                <div key={doctor.id} className="bg-maroon-50 border border-maroon-200 rounded-lg px-4 py-3 flex justify-between items-center">
+                  <div>
+                    <p className="font-semibold text-gray-800 text-sm">{doctor.name.split(' ').slice(0, 2).join(' ')}</p>
+                    <p className="text-xs text-gray-400">{doctor.share_percent}% share</p>
+                  </div>
+                  <span className="text-maroon-600 font-bold text-base">{formatCurrency(share)}</span>
+                </div>
+              ))}
+            </div>
+            <div className="text-sm text-gray-500 border-t border-gray-100 pt-3">
+              Total payouts: <strong className="text-maroon-700">{formatCurrency(dailyDoctorShares.reduce((s, e) => s + e.share, 0))}</strong>
+              <span className="ml-2 text-xs text-gray-400">— each doctor's % applied to their invoices for this day</span>
+            </div>
+          </>
         )}
       </div>
 

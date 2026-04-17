@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Plus, Search, Printer, Eye, Trash2 } from 'lucide-react'
+import { Plus, Search, Printer, Eye, Trash2, Pencil } from 'lucide-react'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { StatusBadge } from '@/components/shared/StatusBadge'
 import { WAButton } from '@/components/shared/WAButton'
@@ -133,6 +133,7 @@ export function OpdPage() {
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null)
   const [selectedToken, setSelectedToken] = useState<OpdToken | null>(null)
   const [showPrintModal, setShowPrintModal] = useState(false)
+  const [editingToken, setEditingToken] = useState<OpdToken | null>(null)
   const [opdFee, setOpdFee] = useState<number>(0)
   const [printFee, setPrintFee] = useState<number>(0)
   const [printPatient, setPrintPatient] = useState<Patient | null>(null)
@@ -211,6 +212,7 @@ export function OpdPage() {
   }
 
   const openForm = () => {
+    setEditingToken(null)
     reset({
       date: todayString(),
       type: 'walk_in',
@@ -224,6 +226,74 @@ export function OpdPage() {
     setPrintPatient(patientsMap[token.patient_id] ?? null)
     setShowPrintModal(true)
   }
+
+  const openEdit = (token: OpdToken) => {
+    setEditingToken(token)
+    const patient = patientsMap[token.patient_id] ?? null
+    setSelectedPatient(patient)
+    reset({
+      token_number: token.token_number,
+      patient_id: token.patient_id,
+      doctor_id: token.doctor_id ?? '',
+      date: token.date,
+      time_slot: token.time_slot ?? '',
+      type: (token.type as 'walk_in' | 'online' | 'whatsapp') ?? 'walk_in',
+      notes: token.notes ?? '',
+      bp: token.bp ?? '',
+      pulse: token.pulse ?? undefined,
+      temp: token.temp ?? undefined,
+      spo2: token.spo2 ?? undefined,
+      rr: token.rr ?? undefined,
+    })
+    setShowForm(true)
+  }
+
+  const updateToken = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: TokenForm }) => {
+      const updates = {
+        token_number: data.token_number.trim(),
+        patient_id: data.patient_id,
+        doctor_id: data.doctor_id,
+        date: data.date,
+        time_slot: data.time_slot,
+        type: data.type,
+        notes: data.notes || null,
+        bp: data.bp || null,
+        pulse: data.pulse ?? null,
+        temp: data.temp ?? null,
+        spo2: data.spo2 ?? null,
+        rr: data.rr ?? null,
+        sync_status: 'pending' as const,
+      }
+      await db.opd_tokens
+        .filter((t) => t.local_id === id || t.server_id === id)
+        .modify(updates)
+      if (useSyncStore.getState().isOnline && navigator.onLine) {
+        await supabase.from('opd_tokens').update({
+          token_number: updates.token_number,
+          patient_id: updates.patient_id,
+          doctor_id: updates.doctor_id,
+          date: updates.date,
+          time_slot: updates.time_slot,
+          type: updates.type,
+          notes: updates.notes,
+          bp: updates.bp,
+          pulse: updates.pulse,
+          temp: updates.temp,
+          spo2: updates.spo2,
+          rr: updates.rr,
+        }).eq('id', id)
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['opd-tokens', selectedDate] })
+      setShowForm(false)
+      setEditingToken(null)
+      reset()
+      setSelectedPatient(null)
+      setPatientSearch('')
+    },
+  })
 
   const mutation = useMutation({
     mutationFn: async (data: TokenForm) => {
@@ -477,6 +547,13 @@ export function OpdPage() {
                           >
                             <Printer className="w-4 h-4" />
                           </button>
+                          <button
+                            onClick={() => openEdit(token)}
+                            className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded"
+                            title="Edit token"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </button>
                           {token.status === 'confirmed' && (
                             <button
                               onClick={() =>
@@ -517,21 +594,23 @@ export function OpdPage() {
         </div>
       )}
 
-      {/* New Token Modal */}
+      {/* New / Edit Token Modal */}
       {showForm && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between sticky top-0 bg-white">
-              <h2 className="text-lg font-semibold">Issue OPD Token</h2>
+              <h2 className="text-lg font-semibold">
+                {editingToken ? `Edit Token #${editingToken.token_number}` : 'Issue OPD Token'}
+              </h2>
               <button
-                onClick={() => { setShowForm(false); reset(); setSelectedPatient(null); setPatientSearch('') }}
+                onClick={() => { setShowForm(false); setEditingToken(null); reset(); setSelectedPatient(null); setPatientSearch('') }}
                 className="text-gray-400 hover:text-gray-600 text-xl leading-none"
               >
                 ×
               </button>
             </div>
 
-            <form onSubmit={handleSubmit((d) => mutation.mutate(d))} className="p-6 space-y-4">
+            <form onSubmit={handleSubmit((d) => editingToken ? updateToken.mutate({ id: editingToken.id, data: d }) : mutation.mutate(d))} className="p-6 space-y-4">
               {/* Token Number */}
               <div className="bg-maroon-50 border border-maroon-200 rounded-lg p-3">
                 <label className="block text-sm font-semibold text-maroon-800 mb-1">
@@ -763,10 +842,13 @@ export function OpdPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={mutation.isPending}
+                  disabled={mutation.isPending || updateToken.isPending}
                   className="px-4 py-2 bg-maroon-500 hover:bg-maroon-600 text-white rounded-lg text-sm font-medium disabled:opacity-50"
                 >
-                  {mutation.isPending ? 'Issuing...' : 'Issue Token & Print'}
+                  {editingToken
+                    ? (updateToken.isPending ? 'Saving...' : 'Save Changes')
+                    : (mutation.isPending ? 'Issuing...' : 'Issue Token & Print')
+                  }
                 </button>
               </div>
             </form>
