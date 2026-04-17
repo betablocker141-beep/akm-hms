@@ -203,7 +203,7 @@ export function OpdPage() {
   const handlePrint = useReactToPrint({
     content: () => printRef.current,
     documentTitle: `OPD-Token-${selectedToken?.token_number}`,
-    pageStyle: `@page { size: 76mm auto; margin: 0mm; } body { margin: 0; padding: 0; }`,
+    pageStyle: `@page { size: 80mm auto !important; margin: 0 !important; } html, body { margin: 0 !important; padding: 0 !important; width: 80mm !important; }`,
   })
 
   const openForm = () => {
