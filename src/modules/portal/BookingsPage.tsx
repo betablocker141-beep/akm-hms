@@ -4,7 +4,7 @@
  */
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Check, X, MessageCircle, Copy, ExternalLink } from 'lucide-react'
+import { Check, X, MessageCircle, Copy, ExternalLink, Link } from 'lucide-react'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { StatusBadge } from '@/components/shared/StatusBadge'
 import { WAButton } from '@/components/shared/WAButton'
