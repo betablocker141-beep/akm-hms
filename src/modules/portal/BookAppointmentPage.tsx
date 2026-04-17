@@ -21,6 +21,7 @@ interface DoctorTimingConfig {
   slots: string[]       // available booking slots
   note?: string
   fridaySlots?: string[] // override slots for Friday (Dr Fouzia)
+  sessions?: { label: string; time: string; color: string }[] // separate session badges
 }
 
 const DOCTOR_TIMING_CONFIG: DoctorTimingConfig[] = [
@@ -28,6 +29,10 @@ const DOCTOR_TIMING_CONFIG: DoctorTimingConfig[] = [
     match: 'fozia',
     timings: 'Noon 12:30–2:30 PM · Evening 7–10 PM',
     days: 'Mon–Sat (Fri: Evening only)',
+    sessions: [
+      { label: '🌤 Noon Session', time: '12:30 PM – 2:30 PM', color: 'bg-amber-50 border-amber-200 text-amber-800' },
+      { label: '🌙 Evening Session', time: '7:00 PM – 10:00 PM', color: 'bg-indigo-50 border-indigo-200 text-indigo-800' },
+    ],
     slots: [
       'Noon: 12:30 PM', 'Noon: 01:00 PM', 'Noon: 01:30 PM', 'Noon: 02:00 PM',
       'Evening: 07:00 PM', 'Evening: 07:30 PM', 'Evening: 08:00 PM',
@@ -37,6 +42,7 @@ const DOCTOR_TIMING_CONFIG: DoctorTimingConfig[] = [
       'Evening: 07:00 PM', 'Evening: 07:30 PM', 'Evening: 08:00 PM',
       'Evening: 08:30 PM', 'Evening: 09:00 PM', 'Evening: 09:30 PM',
     ],
+    note: 'Friday: Evening session only (7–10 PM)',
   },
   {
     match: 'ghazala',
@@ -307,13 +313,19 @@ export function BookAppointmentPage() {
                       )}
                     </div>
                     <p className="text-xs text-gray-500">{d.specialty}</p>
-                    {config && (
-                      <p className="text-xs text-maroon-700 font-medium mt-0.5">
-                        🕐 {config.timings}
-                      </p>
-                    )}
+                    {config?.sessions ? (
+                      <div className="flex flex-wrap gap-1.5 mt-1.5">
+                        {config.sessions.map(s => (
+                          <span key={s.label} className={`inline-flex items-center gap-1 text-xs font-semibold border rounded-lg px-2 py-1 ${s.color}`}>
+                            {s.label} <span className="opacity-70">·</span> {s.time}
+                          </span>
+                        ))}
+                      </div>
+                    ) : config ? (
+                      <p className="text-xs text-maroon-700 font-medium mt-0.5">🕐 {config.timings}</p>
+                    ) : null}
                     {config?.note && (
-                      <p className="text-xs text-blue-600 mt-0.5">{config.note}</p>
+                      <p className="text-xs text-orange-600 mt-0.5 font-medium">⚠ {config.note}</p>
                     )}
                   </div>
                 </div>
@@ -440,9 +452,19 @@ export function BookAppointmentPage() {
                 if (!config) return null
                 return (
                   <div className="bg-maroon-50 border border-maroon-100 rounded-lg px-3 py-2 text-xs text-maroon-700">
-                    <span className="font-semibold">{doc!.name}</span> is available{' '}
-                    <span className="font-medium">{config.days}</span> — {config.timings}
-                    {config.note && <span className="block text-blue-600 mt-0.5">{config.note}</span>}
+                    <span className="font-semibold">{doc!.name}</span> — {config.days}
+                    {config.sessions ? (
+                      <div className="flex flex-wrap gap-1.5 mt-1.5">
+                        {config.sessions.map(s => (
+                          <span key={s.label} className={`inline-flex items-center gap-1 text-xs font-semibold border rounded-lg px-2 py-1 ${s.color}`}>
+                            {s.label} · {s.time}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span> — {config.timings}</span>
+                    )}
+                    {config.note && <span className="block text-orange-600 font-medium mt-0.5">⚠ {config.note}</span>}
                   </div>
                 )
               })()}
