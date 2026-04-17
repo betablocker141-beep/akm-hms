@@ -108,6 +108,32 @@ async function fetchDailyInvoices(date: string): Promise<Invoice[]> {
   )
 }
 
+async function fetchDailyOpdTokens(date: string): Promise<OpdToken[]> {
+  return fetchWithFallback(
+    async () => {
+      const { data, error } = await supabase
+        .from('opd_tokens').select('id, token_number, patient_id, doctor_id, time_slot, status, created_at')
+        .eq('date', date).order('created_at')
+      if (error) throw error
+      return (data ?? []) as OpdToken[]
+    },
+    () => db.opd_tokens.where('date').equals(date).toArray() as unknown as Promise<OpdToken[]>,
+  )
+}
+
+async function fetchDailyErVisits(date: string): Promise<ErVisit[]> {
+  return fetchWithFallback(
+    async () => {
+      const { data, error } = await supabase
+        .from('er_visits').select('id, token_number, patient_id, doctor_id, triage_level, chief_complaint, status, created_at')
+        .eq('visit_date', date).order('created_at')
+      if (error) throw error
+      return (data ?? []) as ErVisit[]
+    },
+    () => db.er_visits.where('visit_date').equals(date).toArray() as unknown as Promise<ErVisit[]>,
+  )
+}
+
 async function fetchPatientNames(patientIds: string[]): Promise<Record<string, string>> {
   if (patientIds.length === 0) return {}
   const map: Record<string, string> = {}
@@ -313,9 +339,23 @@ export function AccountsPage() {
     queryFn:  () => fetchDailyInvoices(dailyDate),
   })
 
+  const { data: dailyOpdTokens = [] } = useQuery({
+    queryKey: ['daily-opd-tokens', dailyDate],
+    queryFn:  () => fetchDailyOpdTokens(dailyDate),
+  })
+
+  const { data: dailyErVisits = [] } = useQuery({
+    queryKey: ['daily-er-visits', dailyDate],
+    queryFn:  () => fetchDailyErVisits(dailyDate),
+  })
+
   const dailyPatientIds = useMemo(
-    () => [...new Set(dailyInvoices.map(i => i.patient_id))],
-    [dailyInvoices],
+    () => [...new Set([
+      ...dailyInvoices.map(i => i.patient_id),
+      ...dailyOpdTokens.map(t => t.patient_id),
+      ...dailyErVisits.map(v => v.patient_id),
+    ])],
+    [dailyInvoices, dailyOpdTokens, dailyErVisits],
   )
   const { data: patientNames = {} } = useQuery({
     queryKey: ['daily-patient-names', dailyPatientIds.sort().join(',')],
@@ -449,23 +489,48 @@ export function AccountsPage() {
         {loadingDaily ? (
           <div className="flex justify-center py-8"><LoadingSpinner /></div>
         ) : (
-          <>
-            {/* Summary cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
-              <div className="rounded-lg bg-green-50 border border-green-200 p-3">
+          <div ref={printRef}>
+            {/* ── Print-only header ── */}
+            <div className="hidden print:block mb-4 text-center border-b-2 border-maroon-500 pb-3">
+              <div className="flex justify-center mb-1"><AKMLogo size={40} /></div>
+              <h2 className="text-base font-bold text-maroon-700">ALIM KHATOON MEDICARE</h2>
+              <p className="text-sm text-gray-600 font-medium">Daily Collection Report — {formatDate(dailyDate)}</p>
+            </div>
+
+            {/* ── Summary cards (screen + print) ── */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-4 print:grid-cols-6 print:gap-2">
+              <div className="rounded-lg bg-green-50 border border-green-200 p-3 lg:col-span-1">
                 <p className="text-xs text-green-600 font-medium">Total Collected</p>
                 <p className="text-lg font-bold text-green-700 mt-0.5">{formatCurrency(dailyCollected)}</p>
                 <p className="text-xs text-green-500">{dailyInvoices.length} invoice{dailyInvoices.length !== 1 ? 's' : ''}</p>
               </div>
-              {(['opd','er','ipd','us'] as const).map(t => (
-                <div key={t} className="rounded-lg bg-gray-50 border border-gray-200 p-3">
-                  <p className="text-xs text-gray-500 font-medium uppercase">{t}</p>
-                  <p className="text-lg font-bold text-gray-800 mt-0.5">{formatCurrency(dailyByType[t] ?? 0)}</p>
+              <div className="rounded-lg bg-blue-50 border border-blue-200 p-3">
+                <p className="text-xs text-blue-600 font-medium uppercase">OPD Tokens</p>
+                <p className="text-lg font-bold text-blue-700 mt-0.5">{dailyOpdTokens.length}</p>
+                <p className="text-xs text-blue-500">{formatCurrency(dailyByType['opd'] ?? 0)} collected</p>
+              </div>
+              <div className="rounded-lg bg-orange-50 border border-orange-200 p-3">
+                <p className="text-xs text-orange-600 font-medium uppercase">ER Tokens</p>
+                <p className="text-lg font-bold text-orange-700 mt-0.5">{dailyErVisits.length}</p>
+                <p className="text-xs text-orange-500">{formatCurrency(dailyByType['er'] ?? 0)} collected</p>
+              </div>
+              <div className="rounded-lg bg-gray-50 border border-gray-200 p-3">
+                <p className="text-xs text-gray-500 font-medium uppercase">IPD</p>
+                <p className="text-lg font-bold text-gray-800 mt-0.5">{formatCurrency(dailyByType['ipd'] ?? 0)}</p>
+              </div>
+              <div className="rounded-lg bg-yellow-50 border border-yellow-200 p-3">
+                <p className="text-xs text-yellow-600 font-medium uppercase">Ultrasound</p>
+                <p className="text-lg font-bold text-yellow-700 mt-0.5">{formatCurrency(dailyByType['us'] ?? 0)}</p>
+              </div>
+              {dailyPending > 0 && (
+                <div className="rounded-lg bg-red-50 border border-red-200 p-3">
+                  <p className="text-xs text-red-500 font-medium">Pending</p>
+                  <p className="text-lg font-bold text-red-600 mt-0.5">{formatCurrency(dailyPending)}</p>
                 </div>
-              ))}
+              )}
             </div>
 
-            {/* Payment method breakdown */}
+            {/* ── Payment method breakdown ── */}
             {Object.keys(dailyByMethod).length > 0 && (
               <div className="flex flex-wrap gap-2 mb-4">
                 {Object.entries(dailyByMethod).map(([method, amt]) => (
@@ -473,146 +538,216 @@ export function AccountsPage() {
                     {PAYMENT_LABELS[method] ?? method}: {formatCurrency(amt)}
                   </span>
                 ))}
-                {dailyPending > 0 && (
-                  <span className="inline-flex items-center gap-1.5 bg-red-50 text-red-600 border border-red-200 rounded-full px-3 py-1 text-xs font-medium">
-                    Pending: {formatCurrency(dailyPending)}
-                  </span>
-                )}
               </div>
             )}
 
-            {/* Printable area */}
-            <div ref={printRef}>
-              {/* Print-only header */}
-              <div className="hidden print:block mb-6 text-center border-b-2 border-maroon-500 pb-4">
-                <div className="flex justify-center mb-2"><AKMLogo size={48} /></div>
-                <h2 className="text-lg font-bold text-maroon-700">ALIM KHATOON MEDICARE</h2>
-                <p className="text-sm text-gray-600">Daily Collection Report — {formatDate(dailyDate)}</p>
-                <div className="flex justify-center gap-6 mt-3 text-sm">
-                  <span>Total Collected: <strong>{formatCurrency(dailyCollected)}</strong></span>
-                  <span>Invoices: <strong>{dailyInvoices.length}</strong></span>
-                  {dailyPending > 0 && <span className="text-red-600">Pending: <strong>{formatCurrency(dailyPending)}</strong></span>}
-                </div>
-              </div>
-
-              {dailyInvoices.length === 0 ? (
-                <p className="text-center py-8 text-gray-400">No invoices found for {formatDate(dailyDate)}.</p>
-              ) : (
+            {/* ── OPD Token list ── */}
+            {dailyOpdTokens.length > 0 && (
+              <div className="mb-5">
+                <p className="text-xs font-semibold text-blue-700 uppercase tracking-wide mb-2">
+                  OPD Tokens ({dailyOpdTokens.length})
+                </p>
                 <div className="overflow-x-auto">
-                  <table className="w-full text-sm min-w-[750px]">
-                    <thead className="bg-gray-50 border-b border-gray-200 print:bg-gray-100">
+                  <table className="w-full text-xs min-w-[500px] border border-blue-100 rounded-lg overflow-hidden">
+                    <thead className="bg-blue-50">
                       <tr>
-                        <th className="text-left px-3 py-2.5 font-medium text-gray-600">#</th>
-                        <th className="text-left px-3 py-2.5 font-medium text-gray-600">Invoice</th>
-                        <th className="text-left px-3 py-2.5 font-medium text-gray-600">Patient</th>
-                        <th className="text-left px-3 py-2.5 font-medium text-gray-600">Type</th>
-                        <th className="text-right px-3 py-2.5 font-medium text-gray-600">Total</th>
-                        <th className="text-right px-3 py-2.5 font-medium text-gray-600">Paid</th>
-                        <th className="text-right px-3 py-2.5 font-medium text-gray-600 print:hidden">Balance</th>
-                        <th className="text-left px-3 py-2.5 font-medium text-gray-600">Method</th>
-                        <th className="text-left px-3 py-2.5 font-medium text-gray-600">Doctor</th>
-                        <th className="text-right px-3 py-2.5 font-medium text-gray-600">Dr Share</th>
-                        <th className="text-left px-3 py-2.5 font-medium text-gray-600">Time</th>
+                        <th className="text-left px-3 py-2 font-medium text-blue-700">Token #</th>
+                        <th className="text-left px-3 py-2 font-medium text-blue-700">Patient</th>
+                        <th className="text-left px-3 py-2 font-medium text-blue-700">Doctor</th>
+                        <th className="text-left px-3 py-2 font-medium text-blue-700">Time</th>
+                        <th className="text-left px-3 py-2 font-medium text-blue-700">Status</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {dailyInvoices.map((inv, idx) => {
-                        const bal = (inv.total ?? 0) - (inv.paid_amount ?? 0)
-                        const docId = (inv as Invoice & { doctor_id?: string | null }).doctor_id
-                        const doc = docId ? doctorMap.get(docId) : undefined
-                        const drShare = doc ? Math.round((inv.paid_amount ?? 0) * doc.share_percent / 100) : 0
+                    <tbody className="divide-y divide-blue-50">
+                      {dailyOpdTokens.map(tok => {
+                        const doc = doctorMap.get(tok.doctor_id ?? '')
                         return (
-                          <tr key={inv.id} className="hover:bg-gray-50">
-                            <td className="px-3 py-2.5 text-gray-400 text-xs">{idx + 1}</td>
-                            <td className="px-3 py-2.5 font-mono text-xs text-maroon-600">{inv.invoice_number}</td>
-                            <td className="px-3 py-2.5 font-medium text-gray-800">
-                              {patientNames[inv.patient_id] ?? `${inv.patient_id.slice(0, 8)}…`}
-                            </td>
-                            <td className="px-3 py-2.5">
-                              <span className={`inline-block px-2 py-0.5 rounded text-xs font-semibold uppercase ${TYPE_COLORS[inv.visit_type] ?? 'bg-gray-100 text-gray-600'}`}>
-                                {inv.visit_type}
-                              </span>
-                            </td>
-                            <td className="px-3 py-2.5 text-right">{formatCurrency(inv.total)}</td>
-                            <td className="px-3 py-2.5 text-right text-green-600 font-medium">{formatCurrency(inv.paid_amount)}</td>
-                            <td className={`px-3 py-2.5 text-right text-sm print:hidden ${bal > 0 ? 'text-red-500' : 'text-gray-400'}`}>
-                              {bal > 0 ? formatCurrency(bal) : '—'}
-                            </td>
-                            <td className="px-3 py-2.5 text-xs text-gray-500 capitalize">
-                              {PAYMENT_LABELS[inv.payment_method ?? ''] ?? inv.payment_method ?? '—'}
-                            </td>
-                            <td className="px-3 py-2.5 text-xs text-gray-600">
-                              {doc ? (
-                                <span title={`${doc.share_percent}% share`}>{doc.name.split(' ').slice(0, 2).join(' ')}</span>
-                              ) : '—'}
-                            </td>
-                            <td className="px-3 py-2.5 text-right text-xs font-medium text-maroon-600">
-                              {drShare > 0 ? formatCurrency(drShare) : '—'}
-                            </td>
-                            <td className="px-3 py-2.5 text-xs text-gray-400">
-                              {new Date(inv.created_at).toLocaleTimeString('en-PK', { hour: '2-digit', minute: '2-digit', hour12: true })}
-                            </td>
+                          <tr key={tok.id} className="hover:bg-blue-50/50">
+                            <td className="px-3 py-1.5 font-bold text-blue-600">{tok.token_number}</td>
+                            <td className="px-3 py-1.5 text-gray-700">{patientNames[tok.patient_id] ?? '—'}</td>
+                            <td className="px-3 py-1.5 text-gray-600">{doc?.name.split(' ').slice(0,2).join(' ') ?? '—'}</td>
+                            <td className="px-3 py-1.5 text-gray-500">{tok.time_slot ?? '—'}</td>
+                            <td className="px-3 py-1.5 capitalize text-gray-500">{tok.status}</td>
                           </tr>
                         )
                       })}
                     </tbody>
-                    <tfoot className="border-t-2 border-gray-300 bg-gray-50">
-                      <tr className="font-semibold">
-                        <td colSpan={4} className="px-3 py-2.5 text-gray-700">TOTAL ({dailyInvoices.length} invoices)</td>
-                        <td className="px-3 py-2.5 text-right">{formatCurrency(dailyTotal)}</td>
-                        <td className="px-3 py-2.5 text-right text-green-700">{formatCurrency(dailyCollected)}</td>
-                        <td className={`px-3 py-2.5 text-right print:hidden ${dailyPending > 0 ? 'text-red-600' : 'text-gray-400'}`}>
-                          {dailyPending > 0 ? formatCurrency(dailyPending) : '—'}
-                        </td>
-                        <td className="px-3 py-2.5" />
-                        <td className="px-3 py-2.5" />
-                        <td className="px-3 py-2.5 text-right text-maroon-600">
-                          {formatCurrency(dailyDoctorShares.reduce((s, e) => s + e.share, 0))}
-                        </td>
-                        <td />
-                      </tr>
-                    </tfoot>
                   </table>
                 </div>
-              )}
+              </div>
+            )}
 
-              {/* Daily doctor share summary */}
-              {dailyDoctorShares.length > 0 && (
-                <div className="mt-4 p-4 bg-maroon-50 border border-maroon-200 rounded-lg">
-                  <p className="text-xs font-semibold text-maroon-700 mb-2 uppercase tracking-wide">Doctor Share Breakdown — {formatDate(dailyDate)}</p>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-                    {dailyDoctorShares.map(({ doctor, share }) => (
-                      <div key={doctor.id} className="flex justify-between items-center bg-white border border-maroon-100 rounded px-3 py-1.5 text-xs">
-                        <span className="text-gray-700 font-medium truncate mr-2">{doctor.name.split(' ').slice(0, 2).join(' ')}</span>
-                        <span className="text-maroon-600 font-bold whitespace-nowrap">{formatCurrency(share)}</span>
-                      </div>
-                    ))}
-                  </div>
-                  <p className="text-xs text-maroon-500 mt-2">
-                    Total doctor payouts today: <strong>{formatCurrency(dailyDoctorShares.reduce((s, e) => s + e.share, 0))}</strong>
-                    &nbsp;— Based on each doctor's share % applied to their linked invoices.
-                  </p>
+            {/* ── ER Token list ── */}
+            {dailyErVisits.length > 0 && (
+              <div className="mb-5">
+                <p className="text-xs font-semibold text-orange-700 uppercase tracking-wide mb-2">
+                  ER Tokens ({dailyErVisits.length})
+                </p>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs min-w-[500px] border border-orange-100 rounded-lg overflow-hidden">
+                    <thead className="bg-orange-50">
+                      <tr>
+                        <th className="text-left px-3 py-2 font-medium text-orange-700">Token #</th>
+                        <th className="text-left px-3 py-2 font-medium text-orange-700">Patient</th>
+                        <th className="text-left px-3 py-2 font-medium text-orange-700">Triage</th>
+                        <th className="text-left px-3 py-2 font-medium text-orange-700">Complaint</th>
+                        <th className="text-left px-3 py-2 font-medium text-orange-700">Doctor</th>
+                        <th className="text-left px-3 py-2 font-medium text-orange-700">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-orange-50">
+                      {dailyErVisits.map(vis => {
+                        const doc = doctorMap.get(vis.doctor_id ?? '')
+                        return (
+                          <tr key={vis.id} className="hover:bg-orange-50/50">
+                            <td className="px-3 py-1.5 font-bold text-orange-600">{vis.token_number}</td>
+                            <td className="px-3 py-1.5 text-gray-700">{patientNames[vis.patient_id] ?? '—'}</td>
+                            <td className="px-3 py-1.5 font-bold text-orange-500">L{vis.triage_level}</td>
+                            <td className="px-3 py-1.5 text-gray-600 max-w-[180px] truncate">{vis.chief_complaint}</td>
+                            <td className="px-3 py-1.5 text-gray-600">{doc?.name.split(' ').slice(0,2).join(' ') ?? '—'}</td>
+                            <td className="px-3 py-1.5 capitalize text-gray-500">{vis.status}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
                 </div>
-              )}
+              </div>
+            )}
 
-              {/* Print-only footer */}
-              <div className="hidden print:block mt-6 pt-4 border-t border-gray-300 text-xs text-gray-500 text-center">
-                <div className="flex justify-between mb-2 text-sm font-medium">
-                  {Object.entries(dailyByMethod).map(([m, a]) => (
-                    <span key={m}>{PAYMENT_LABELS[m] ?? m}: {formatCurrency(a)}</span>
+            {/* ── Invoice table ── */}
+            <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-2">
+              Invoices ({dailyInvoices.length})
+            </p>
+            {dailyInvoices.length === 0 ? (
+              <p className="text-center py-6 text-gray-400 text-sm">No invoices found for {formatDate(dailyDate)}.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm min-w-[750px]">
+                  <thead className="bg-gray-50 border-b border-gray-200 print:bg-gray-100">
+                    <tr>
+                      <th className="text-left px-3 py-2.5 font-medium text-gray-600">#</th>
+                      <th className="text-left px-3 py-2.5 font-medium text-gray-600">Invoice</th>
+                      <th className="text-left px-3 py-2.5 font-medium text-gray-600">Patient</th>
+                      <th className="text-left px-3 py-2.5 font-medium text-gray-600">Type</th>
+                      <th className="text-right px-3 py-2.5 font-medium text-gray-600">Total</th>
+                      <th className="text-right px-3 py-2.5 font-medium text-gray-600">Paid</th>
+                      <th className="text-right px-3 py-2.5 font-medium text-gray-600 print:hidden">Balance</th>
+                      <th className="text-left px-3 py-2.5 font-medium text-gray-600">Method</th>
+                      <th className="text-left px-3 py-2.5 font-medium text-gray-600">Doctor</th>
+                      <th className="text-right px-3 py-2.5 font-medium text-gray-600">Dr Share</th>
+                      <th className="text-left px-3 py-2.5 font-medium text-gray-600">Time</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {dailyInvoices.map((inv, idx) => {
+                      const bal = (inv.total ?? 0) - (inv.paid_amount ?? 0)
+                      const docId = (inv as Invoice & { doctor_id?: string | null }).doctor_id
+                      const doc = docId ? doctorMap.get(docId) : undefined
+                      const drShare = doc ? Math.round((inv.paid_amount ?? 0) * doc.share_percent / 100) : 0
+                      return (
+                        <tr key={inv.id} className="hover:bg-gray-50">
+                          <td className="px-3 py-2.5 text-gray-400 text-xs">{idx + 1}</td>
+                          <td className="px-3 py-2.5 font-mono text-xs text-maroon-600">{inv.invoice_number}</td>
+                          <td className="px-3 py-2.5 font-medium text-gray-800">
+                            {patientNames[inv.patient_id] ?? `${inv.patient_id.slice(0, 8)}…`}
+                          </td>
+                          <td className="px-3 py-2.5">
+                            <span className={`inline-block px-2 py-0.5 rounded text-xs font-semibold uppercase ${TYPE_COLORS[inv.visit_type] ?? 'bg-gray-100 text-gray-600'}`}>
+                              {inv.visit_type}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2.5 text-right">{formatCurrency(inv.total)}</td>
+                          <td className="px-3 py-2.5 text-right text-green-600 font-medium">{formatCurrency(inv.paid_amount)}</td>
+                          <td className={`px-3 py-2.5 text-right text-sm print:hidden ${bal > 0 ? 'text-red-500' : 'text-gray-400'}`}>
+                            {bal > 0 ? formatCurrency(bal) : '—'}
+                          </td>
+                          <td className="px-3 py-2.5 text-xs text-gray-500 capitalize">
+                            {PAYMENT_LABELS[inv.payment_method ?? ''] ?? inv.payment_method ?? '—'}
+                          </td>
+                          <td className="px-3 py-2.5 text-xs text-gray-600">
+                            {doc ? (
+                              <span title={`${doc.share_percent}% share`}>{doc.name.split(' ').slice(0, 2).join(' ')}</span>
+                            ) : '—'}
+                          </td>
+                          <td className="px-3 py-2.5 text-right text-xs font-medium text-maroon-600">
+                            {drShare > 0 ? formatCurrency(drShare) : '—'}
+                          </td>
+                          <td className="px-3 py-2.5 text-xs text-gray-400">
+                            {new Date(inv.created_at).toLocaleTimeString('en-PK', { hour: '2-digit', minute: '2-digit', hour12: true })}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                  <tfoot className="border-t-2 border-gray-300 bg-gray-50">
+                    <tr className="font-semibold">
+                      <td colSpan={4} className="px-3 py-2.5 text-gray-700">TOTAL ({dailyInvoices.length} invoices)</td>
+                      <td className="px-3 py-2.5 text-right">{formatCurrency(dailyTotal)}</td>
+                      <td className="px-3 py-2.5 text-right text-green-700">{formatCurrency(dailyCollected)}</td>
+                      <td className={`px-3 py-2.5 text-right print:hidden ${dailyPending > 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                        {dailyPending > 0 ? formatCurrency(dailyPending) : '—'}
+                      </td>
+                      <td className="px-3 py-2.5" />
+                      <td className="px-3 py-2.5" />
+                      <td className="px-3 py-2.5 text-right text-maroon-600">
+                        {formatCurrency(dailyDoctorShares.reduce((s, e) => s + e.share, 0))}
+                      </td>
+                      <td />
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+
+            {/* ── Daily doctor earnings breakdown ── */}
+            {dailyDoctorShares.length > 0 && (
+              <div className="mt-4 p-4 bg-maroon-50 border border-maroon-200 rounded-lg">
+                <p className="text-xs font-semibold text-maroon-700 mb-2 uppercase tracking-wide">
+                  Doctor Daily Earnings — {formatDate(dailyDate)}
+                </p>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+                  {dailyDoctorShares.map(({ doctor, share }) => (
+                    <div key={doctor.id} className="flex justify-between items-center bg-white border border-maroon-100 rounded px-3 py-1.5 text-xs">
+                      <div>
+                        <span className="text-gray-700 font-medium block truncate">{doctor.name.split(' ').slice(0, 2).join(' ')}</span>
+                        <span className="text-gray-400">{doctor.share_percent}% share</span>
+                      </div>
+                      <span className="text-maroon-600 font-bold whitespace-nowrap ml-2">{formatCurrency(share)}</span>
+                    </div>
                   ))}
                 </div>
-                {dailyDoctorShares.length > 0 && (
-                  <div className="flex justify-center gap-4 mb-2 text-xs">
-                    {dailyDoctorShares.map(({ doctor, share }) => (
-                      <span key={doctor.id}>{doctor.name.split(' ').slice(0, 2).join(' ')}: {formatCurrency(share)}</span>
-                    ))}
-                  </div>
-                )}
-                Printed: {new Date().toLocaleString('en-PK')} · AKM Hospital Management System
+                <p className="text-xs text-maroon-500 mt-2">
+                  Total doctor payouts today: <strong>{formatCurrency(dailyDoctorShares.reduce((s, e) => s + e.share, 0))}</strong>
+                  {' '}— Each doctor's share % applied to their linked invoices.
+                </p>
               </div>
+            )}
+
+            {/* ── Print-only footer ── */}
+            <div className="hidden print:block mt-4 pt-3 border-t border-gray-300 text-xs text-gray-500 text-center">
+              <div className="flex justify-center gap-4 mb-2 text-xs font-medium">
+                <span>OPD Tokens: <strong>{dailyOpdTokens.length}</strong></span>
+                <span>ER Tokens: <strong>{dailyErVisits.length}</strong></span>
+                <span>Invoices: <strong>{dailyInvoices.length}</strong></span>
+                <span>Collected: <strong>{formatCurrency(dailyCollected)}</strong></span>
+                {dailyPending > 0 && <span className="text-red-600">Pending: <strong>{formatCurrency(dailyPending)}</strong></span>}
+              </div>
+              <div className="flex justify-center gap-4 mb-1 text-xs">
+                {Object.entries(dailyByMethod).map(([m, a]) => (
+                  <span key={m}>{PAYMENT_LABELS[m] ?? m}: {formatCurrency(a)}</span>
+                ))}
+              </div>
+              {dailyDoctorShares.length > 0 && (
+                <div className="flex justify-center flex-wrap gap-3 mb-1 text-xs">
+                  {dailyDoctorShares.map(({ doctor, share }) => (
+                    <span key={doctor.id}>{doctor.name.split(' ').slice(0, 2).join(' ')} ({doctor.share_percent}%): {formatCurrency(share)}</span>
+                  ))}
+                </div>
+              )}
+              Printed: {new Date().toLocaleString('en-PK')} · AKM Hospital Management System
             </div>
-          </>
+          </div>
         )}
       </div>
 
