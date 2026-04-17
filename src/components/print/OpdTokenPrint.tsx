@@ -20,25 +20,25 @@ export function OpdTokenPrint({ token, patient, doctor, fee, size = 'thermal' }:
       className="print-area bg-white font-sans"
       style={{
         width: size === 'thermal' ? '76mm' : '148mm',
-        padding: '2mm 3mm',
+        padding: '2mm 4mm',
         border: '1px solid #e5e7eb',
         borderRadius: '4px',
-        fontSize: '9pt',
+        fontSize: '10pt',
         boxSizing: 'border-box',
       }}
     >
       {/* Header */}
-      <div className="text-center" style={{ borderBottom: '2px solid #8B0000', paddingBottom: '2mm', marginBottom: '2mm' }}>
-        <p className="font-bold leading-tight" style={{ color: '#8B0000', fontSize: '11pt' }}>
+      <div className="text-center" style={{ borderBottom: '2px solid #8B0000', paddingBottom: '1.5mm', marginBottom: '1.5mm' }}>
+        <p className="font-bold leading-tight" style={{ color: '#8B0000', fontSize: '12pt' }}>
           ALIM KHATOON MEDICARE
         </p>
-        <p style={{ fontSize: '7.5pt', color: '#555' }}>── OPD TOKEN ──</p>
+        <p style={{ fontSize: '8pt', color: '#555' }}>── OPD TOKEN ──</p>
       </div>
 
       {/* Token number */}
-      <div className="text-center" style={{ margin: '1mm 0' }}>
-        <p style={{ fontSize: '7pt', color: '#888', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Token No.</p>
-        <p className="font-bold leading-none" style={{ fontSize: '24pt', color: '#8B0000', marginTop: '1px' }}>
+      <div className="text-center" style={{ margin: '0.5mm 0' }}>
+        <p style={{ fontSize: '7.5pt', color: '#888', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Token No.</p>
+        <p className="font-bold leading-none" style={{ fontSize: '30pt', color: '#8B0000', marginTop: '0' }}>
           {token.token_number}
         </p>
       </div>
@@ -46,7 +46,7 @@ export function OpdTokenPrint({ token, patient, doctor, fee, size = 'thermal' }:
       <div style={{ borderTop: '1px dashed #ccc', margin: '2px 0' }} />
 
       {/* Details */}
-      <div style={{ lineHeight: 1.4 }}>
+      <div style={{ lineHeight: 1.45 }}>
         <Row label="Patient" value={patient?.name ?? '—'} bold />
         <Row label="MRN" value={patient?.mrn ?? '—'} />
         <Row label="Age / Sex" value={patient ? `${calculateAge(patient.dob)} / ${patient.gender ?? '—'}` : '—'} />
@@ -64,8 +64,8 @@ export function OpdTokenPrint({ token, patient, doctor, fee, size = 'thermal' }:
       {fee !== undefined && fee > 0 && (
         <>
           <div style={{ borderTop: '1px dashed #ccc', margin: '2px 0' }} />
-          <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '3px', padding: '2px 5px' }}>
-            <div className="flex justify-between items-center" style={{ fontSize: '9.5pt', fontWeight: 700 }}>
+          <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '3px', padding: '2px 6px' }}>
+            <div className="flex justify-between items-center" style={{ fontSize: '10pt', fontWeight: 700 }}>
               <span style={{ color: '#15803d' }}>✔ Paid</span>
               <span style={{ color: '#166534' }}>Rs. {fee.toLocaleString()}</span>
             </div>
@@ -75,7 +75,7 @@ export function OpdTokenPrint({ token, patient, doctor, fee, size = 'thermal' }:
 
       {/* Footer */}
       <div style={{ borderTop: '1px dashed #ccc', margin: '2px 0' }} />
-      <div className="text-center" style={{ fontSize: '7.5pt', color: '#666' }}>
+      <div className="text-center" style={{ fontSize: '8pt', color: '#666' }}>
         <p style={{ color: '#8B0000', fontWeight: 600 }}>Thank you — AKM</p>
         <p>Tel: {hospitalPhone}</p>
       </div>
@@ -85,7 +85,7 @@ export function OpdTokenPrint({ token, patient, doctor, fee, size = 'thermal' }:
 
 function Row({ label, value, bold }: { label: string; value: string; bold?: boolean }) {
   return (
-    <div className="flex justify-between gap-1" style={{ fontSize: '8.5pt' }}>
+    <div className="flex justify-between gap-1" style={{ fontSize: '9.5pt' }}>
       <span style={{ color: bold ? '#374151' : '#6b7280', fontWeight: bold ? 600 : 500, flexShrink: 0 }}>{label}:</span>
       <span style={{ color: bold ? '#111827' : '#1f2937', fontWeight: bold ? 600 : 400, textAlign: 'right' }}>{value}</span>
     </div>
