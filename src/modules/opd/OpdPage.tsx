@@ -3,7 +3,6 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { useReactToPrint } from 'react-to-print'
 import { Plus, Search, Printer, Eye, Trash2 } from 'lucide-react'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { StatusBadge } from '@/components/shared/StatusBadge'
@@ -200,12 +199,16 @@ export function OpdPage() {
     },
   })
 
-  const handlePrint = useReactToPrint({
-    content: () => printRef.current,
-    copyStyles: false,
-    documentTitle: `OPD-Token-${selectedToken?.token_number}`,
-    pageStyle: `@page { size: 80mm auto !important; margin: 0 !important; } html, body { margin: 0 !important; padding: 0 !important; width: 80mm !important; background: #fff !important; }`,
-  })
+  const handlePrint = () => {
+    if (!printRef.current) return
+    const html = printRef.current.innerHTML
+    const win = window.open('', '_blank', 'width=420,height=700')
+    if (!win) return
+    win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>OPD-Token-${selectedToken?.token_number ?? ''}</title><style>@page{size:80mm auto;margin:0}*{box-sizing:border-box}html,body{margin:0;padding:0;width:80mm;background:#fff}</style></head><body style="margin:0;padding:0;width:80mm;background:#fff">${html}</body></html>`)
+    win.document.close()
+    win.focus()
+    setTimeout(() => { win.print(); win.close() }, 400)
+  }
 
   const openForm = () => {
     reset({
