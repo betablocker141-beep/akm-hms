@@ -145,6 +145,7 @@ export function ErPage() {
   const handlePrint = useReactToPrint({
     content: () => printRef.current,
     documentTitle: `ER-Token-${selectedVisit?.token_number}`,
+    pageStyle: `@page { size: 76mm auto; margin: 0mm; } body { margin: 0; padding: 0; }`,
   })
 
   const mutation = useMutation({

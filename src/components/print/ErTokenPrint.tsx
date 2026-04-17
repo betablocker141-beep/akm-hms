@@ -1,3 +1,7 @@
+/**
+ * ER Token Print — 76mm thermal receipt
+ * @page size is set via pageStyle in useReactToPrint (76mm auto, 0 margin)
+ */
 import { formatDate, calculateAge } from '@/lib/utils'
 import type { ErVisit, Patient } from '@/types'
 import { TRIAGE_LABELS } from '@/types/er'
@@ -20,65 +24,67 @@ export function ErTokenPrint({ visit, patient, moName, fee }: ErTokenPrintProps)
       className="print-area bg-white font-sans"
       style={{
         width: '76mm',
-        padding: '2mm 4mm',
-        border: '1px solid #e5e7eb',
-        borderRadius: '4px',
-        fontSize: '10pt',
+        margin: '0 auto',
+        padding: '3mm 4mm 3mm 4mm',
         boxSizing: 'border-box',
+        fontFamily: 'Arial, sans-serif',
       }}
     >
-      {/* Header */}
-      <div className="text-center" style={{ borderBottom: '2px solid #EA580C', paddingBottom: '1.5mm', marginBottom: '1.5mm' }}>
-        <p className="font-bold leading-tight" style={{ color: '#EA580C', fontSize: '12pt' }}>
+      {/* ── Header ── */}
+      <div style={{ textAlign: 'center', borderBottom: '2px solid #EA580C', paddingBottom: '2mm', marginBottom: '2mm' }}>
+        <div style={{ fontWeight: 800, color: '#EA580C', fontSize: '13pt', lineHeight: 1.2 }}>
           ALIM KHATOON MEDICARE
-        </p>
-        <p style={{ fontSize: '8pt', color: '#EA580C', fontWeight: 600 }}>── EMERGENCY ──</p>
+        </div>
+        <div style={{ fontSize: '9pt', color: '#EA580C', fontWeight: 700, marginTop: '1px' }}>── EMERGENCY ──</div>
       </div>
 
-      {/* Triage badge */}
-      <div
-        className="text-center text-white font-bold rounded"
-        style={{ backgroundColor: triageColors[visit.triage_level], fontSize: '8.5pt', padding: '1px 0', marginBottom: '1.5mm' }}
-      >
+      {/* ── Triage Badge ── */}
+      <div style={{
+        textAlign: 'center', color: '#fff', fontWeight: 800,
+        backgroundColor: triageColors[visit.triage_level],
+        fontSize: '10pt', padding: '2px 0', borderRadius: '3px', marginBottom: '2mm',
+      }}>
         TRIAGE L{visit.triage_level} — {TRIAGE_LABELS[visit.triage_level as 1|2|3|4|5].split(' ')[0].toUpperCase()}
       </div>
 
-      {/* Token number */}
-      <div className="text-center" style={{ margin: '0.5mm 0' }}>
-        <p style={{ fontSize: '7.5pt', color: '#888', textTransform: 'uppercase', letterSpacing: '0.08em' }}>ER Token</p>
-        <p className="font-bold leading-none" style={{ fontSize: '30pt', color: '#EA580C', marginTop: '0' }}>
+      {/* ── Token Number ── */}
+      <div style={{ textAlign: 'center', margin: '2mm 0 1mm' }}>
+        <div style={{ fontSize: '8pt', color: '#999', textTransform: 'uppercase', letterSpacing: '0.1em' }}>ER Token</div>
+        <div style={{ fontSize: '36pt', fontWeight: 900, color: '#EA580C', lineHeight: 1 }}>
           {visit.token_number}
-        </p>
+        </div>
       </div>
 
-      <div style={{ borderTop: '1px dashed #ccc', margin: '2px 0' }} />
+      <div style={{ borderTop: '1px dashed #bbb', margin: '2mm 0' }} />
 
-      {/* Details */}
-      <div style={{ lineHeight: 1.45 }}>
-        <Row label="Patient" value={patient?.name ?? '—'} bold />
-        <Row label="MRN" value={patient?.mrn ?? '—'} />
-        <Row label="Age / Sex" value={patient ? `${calculateAge(patient.dob)} / ${patient.gender ?? '—'}` : '—'} />
-        <Row label="Date" value={formatDate(visit.visit_date)} />
-        <Row label="Complaint" value={visit.chief_complaint} />
+      {/* ── Patient Details ── */}
+      <div style={{ fontSize: '10pt', lineHeight: 1.6 }}>
+        <Row label="Patient"   value={patient?.name ?? '—'}                                                   bold />
+        <Row label="MRN"       value={patient?.mrn  ?? '—'}                                                   />
+        <Row label="Age/Sex"   value={patient ? `${calculateAge(patient.dob)} / ${patient.gender ?? '—'}` : '—'} />
+        <Row label="Date"      value={formatDate(visit.visit_date)}                                           />
+        <Row label="Complaint" value={visit.chief_complaint}                                                  />
         {moName && <Row label="MO" value={moName} />}
       </div>
 
-      <div style={{ borderTop: '1px dashed #ccc', margin: '2px 0' }} />
-
-      {/* Payment */}
+      {/* ── Payment ── */}
       {fee !== undefined && fee > 0 && (
-        <div style={{ background: '#fff7ed', border: '1px solid #EA580C', borderRadius: '3px', padding: '2px 6px', marginBottom: '2px' }}>
-          <div className="flex justify-between items-center" style={{ fontSize: '10pt', fontWeight: 700, color: '#9a3412' }}>
-            <span>✔ PAID</span>
-            <span>Rs. {fee.toLocaleString()}</span>
+        <>
+          <div style={{ borderTop: '1px dashed #bbb', margin: '2mm 0' }} />
+          <div style={{ background: '#fff7ed', border: '1px solid #EA580C', borderRadius: '3px', padding: '2mm 3mm' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11pt', fontWeight: 700, color: '#9a3412' }}>
+              <span>✔ PAID</span>
+              <span>Rs. {fee.toLocaleString()}</span>
+            </div>
           </div>
-        </div>
+        </>
       )}
 
-      {/* Footer */}
-      <div className="text-center" style={{ fontSize: '8pt', color: '#666' }}>
-        <p style={{ color: '#EA580C', fontWeight: 600 }}>EMERGENCY — Please wait</p>
-        <p>Tel: {hospitalPhone}</p>
+      {/* ── Footer ── */}
+      <div style={{ borderTop: '1px dashed #bbb', margin: '2mm 0' }} />
+      <div style={{ textAlign: 'center', fontSize: '8.5pt', color: '#666' }}>
+        <div style={{ color: '#EA580C', fontWeight: 700 }}>EMERGENCY — Please wait</div>
+        <div>Tel: {hospitalPhone}</div>
       </div>
     </div>
   )
@@ -86,9 +92,9 @@ export function ErTokenPrint({ visit, patient, moName, fee }: ErTokenPrintProps)
 
 function Row({ label, value, bold }: { label: string; value: string; bold?: boolean }) {
   return (
-    <div className="flex justify-between gap-1" style={{ fontSize: '9.5pt' }}>
-      <span style={{ color: bold ? '#374151' : '#6b7280', fontWeight: bold ? 600 : 500, flexShrink: 0 }}>{label}:</span>
-      <span style={{ color: bold ? '#111827' : '#1f2937', fontWeight: bold ? 600 : 400, textAlign: 'right' }}>{value}</span>
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '4px' }}>
+      <span style={{ color: '#555', fontWeight: 600, flexShrink: 0 }}>{label}:</span>
+      <span style={{ color: bold ? '#111' : '#222', fontWeight: bold ? 700 : 400, textAlign: 'right' }}>{value}</span>
     </div>
   )
 }
