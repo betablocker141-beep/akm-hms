@@ -64,13 +64,19 @@ async function fetchTokensByDate(date: string): Promise<OpdToken[]> {
     const supabaseCreatedAts = new Set(data.map((t) => t.created_at).filter(Boolean))
     const dexieOnly = dexieTokens.filter((t) => {
       const rec = t as unknown as { server_id: string | null; created_at: string }
-      // Already synced — Supabase is authoritative
       if (rec.server_id && supabaseIds.has(rec.server_id)) return false
-      // Race condition: sync pushed to Supabase but Dexie server_id not yet updated
       if (rec.created_at && supabaseCreatedAts.has(rec.created_at)) return false
       return true
     })
-    return [...dexieOnly, ...data]
+    // Deduplicate Supabase results by created_at — sync race can produce identical rows
+    const seen = new Set<string>()
+    const dedupedSupabase = data.filter((t) => {
+      const key = t.created_at ?? t.id
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    return [...dexieOnly, ...dedupedSupabase]
   } catch {
     return dexieTokens
   }
@@ -324,7 +330,10 @@ export function OpdPage() {
         spo2: data.spo2 || null,
         rr: data.rr || null,
         created_at: new Date().toISOString(),
-        sync_status: 'pending' as const,
+        // Mark synced immediately when online so the sync engine doesn't also
+        // push this record (prevents duplicate inserts into Supabase).
+        // Reverted to 'pending' below if the insert fails.
+        sync_status: (online ? 'synced' : 'pending') as 'synced' | 'pending',
       }
 
       await db.opd_tokens.add(record)
@@ -351,8 +360,13 @@ export function OpdPage() {
             const { data: saved, error } = await Promise.race([insert, timeout]) as { data: { id: string } | null; error: unknown }
             if (!error && saved) {
               await db.opd_tokens.where('local_id').equals(localId).modify({ server_id: saved.id, sync_status: 'synced' })
+            } else {
+              // Insert failed — let sync engine retry
+              await db.opd_tokens.where('local_id').equals(localId).modify({ sync_status: 'pending' })
             }
-          } catch { /* stays pending */ }
+          } catch {
+            await db.opd_tokens.where('local_id').equals(localId).modify({ sync_status: 'pending' })
+          }
         })()
       }
 
