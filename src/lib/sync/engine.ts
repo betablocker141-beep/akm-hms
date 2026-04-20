@@ -138,10 +138,17 @@ async function syncTable(tableName: SyncableTable) {
       })
     } catch (err) {
       console.error(`[sync] failed to push ${tableName} record ${record.local_id}:`, err)
-      await (db as any)[tableName]
-        .where('local_id')
-        .equals(record.local_id)
-        .modify({ sync_status: 'conflict' })
+      // Only mark unique-constraint violations as conflict (permanent, no point retrying).
+      // All other errors (network, FK violations waiting on another table) stay 'pending'
+      // so the next sync cycle retries them automatically.
+      const code = (err as { code?: string })?.code
+      if (code === '23505') {
+        await (db as any)[tableName]
+          .where('local_id')
+          .equals(record.local_id)
+          .modify({ sync_status: 'conflict' })
+      }
+      // else: leave sync_status as 'pending' — retry on next cycle
     }
   }
 }
@@ -275,6 +282,16 @@ export async function runSync() {
   setSyncing(true)
 
   try {
+    // Reset any records stuck in 'conflict' (from transient failures) back to 'pending'
+    // so they get retried this cycle. Only genuine unique-violation conflicts stay stuck.
+    for (const table of Object.keys(TABLE_MAP) as SyncableTable[]) {
+      try {
+        await (db as any)[table]
+          .where('sync_status').equals('conflict')
+          .modify({ sync_status: 'pending' })
+      } catch { /* table may not exist yet */ }
+    }
+
     for (const table of Object.keys(TABLE_MAP) as SyncableTable[]) {
       try {
         await syncTable(table)

@@ -25,6 +25,15 @@ export const useAuthStore = create<AuthState>()(
 
       login: async (email: string, password: string) => {
         set({ isLoading: true, error: null })
+
+        if (!navigator.onLine) {
+          set({
+            error: 'No internet connection. Please connect to the internet to sign in.',
+            isLoading: false,
+          })
+          throw new Error('No internet connection')
+        }
+
         try {
           const { data, error } = await supabase.auth.signInWithPassword({
             email,
@@ -65,8 +74,16 @@ export const useAuthStore = create<AuthState>()(
             })
           }
         } catch (err) {
+          const raw = err instanceof Error ? err.message : 'Login failed'
+          const isNetworkError =
+            raw.includes('Failed to fetch') ||
+            raw.includes('NetworkError') ||
+            raw.toLowerCase().includes('network request failed') ||
+            raw.toLowerCase().includes('connection')
           set({
-            error: err instanceof Error ? err.message : 'Login failed',
+            error: isNetworkError
+              ? 'Network error. Please check your connection and try again.'
+              : raw,
             isLoading: false,
           })
           throw err
