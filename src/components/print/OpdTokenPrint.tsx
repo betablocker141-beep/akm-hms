@@ -6,10 +6,12 @@ interface OpdTokenPrintProps {
   patient?: Patient
   doctor?: Doctor
   fee?: number
+  paymentMethod?: string
+  receiptNo?: string
   size?: 'thermal' | 'a4'
 }
 
-export function OpdTokenPrint({ token, patient, doctor, fee }: OpdTokenPrintProps) {
+export function OpdTokenPrint({ token, patient, doctor, fee, paymentMethod, receiptNo }: OpdTokenPrintProps) {
   const hospitalPhone = import.meta.env.VITE_HOSPITAL_PHONE || '042-35977450'
 
   return (
@@ -98,10 +100,23 @@ export function OpdTokenPrint({ token, patient, doctor, fee }: OpdTokenPrintProp
             <div style={{
               background: '#f0fdf4', border: '1px solid #86efac',
               borderRadius: '3px', padding: '2mm 3mm',
-              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
             }}>
-              <span style={{ color: '#15803d', fontWeight: 800, fontSize: '12pt' }}>✔ PAID</span>
-              <span style={{ color: '#166534', fontWeight: 800, fontSize: '13pt' }}>Rs. {fee.toLocaleString()}</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ color: '#15803d', fontWeight: 800, fontSize: '12pt' }}>✔ PAID</span>
+                <span style={{ color: '#166534', fontWeight: 800, fontSize: '13pt' }}>Rs. {fee.toLocaleString()}</span>
+              </div>
+              {paymentMethod && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1mm', fontSize: '9.5pt' }}>
+                  <span style={{ color: '#15803d' }}>Method:</span>
+                  <span style={{ color: '#166534', fontWeight: 700 }}>{paymentMethod.replace('_', ' ').toUpperCase()}</span>
+                </div>
+              )}
+              {receiptNo && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9.5pt' }}>
+                  <span style={{ color: '#15803d' }}>Txn ID:</span>
+                  <span style={{ color: '#166534', fontWeight: 700 }}>{receiptNo}</span>
+                </div>
+              )}
             </div>
           </>
         )}

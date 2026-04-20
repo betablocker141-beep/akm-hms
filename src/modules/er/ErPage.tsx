@@ -106,8 +106,12 @@ export function ErPage() {
   const [familyPhone, setFamilyPhone] = useState('')
   const [erMoName, setErMoName] = useState('Dr. Waseem')
   const [erFee, setErFee] = useState<number>(0)
+  const [erPaymentMethod, setErPaymentMethod] = useState<string>('cash')
+  const [erReceiptNo, setErReceiptNo] = useState<string>('')
   const [printMoName, setPrintMoName] = useState('Dr. Waseem')
   const [printFee, setPrintFee] = useState<number>(0)
+  const [printPaymentMethod, setPrintPaymentMethod] = useState<string>('cash')
+  const [printReceiptNo, setPrintReceiptNo] = useState<string>('')
   const [printPatient, setPrintPatient] = useState<Patient | null>(null)
   const [erPatientSearch, setErPatientSearch] = useState('')
   const [erSelectedPatient, setErSelectedPatient] = useState<Patient | null>(null)
@@ -232,6 +236,8 @@ export function ErPage() {
       setSelectedVisit(record as unknown as ErVisit)
       setPrintMoName(erMoName)
       setPrintFee(erFee)
+      setPrintPaymentMethod(erPaymentMethod)
+      setPrintReceiptNo(erReceiptNo)
       setPrintPatient(erSelectedPatient)
       setShowPrintModal(true)
       reset()
@@ -252,7 +258,7 @@ export function ErPage() {
               items: [{ id: generateUUID(), invoice_id: localId, description: 'ER Registration Fee', quantity: 1, unit_price: erFee, total: erFee }],
               subtotal: erFee, discount: 0, discount_type: 'amount' as const, tax: 0,
               total: erFee, paid_amount: erFee,
-              payment_method: 'cash' as const, receipt_no: null,
+              payment_method: erPaymentMethod as 'cash' | 'card' | 'bank_transfer' | 'jazzcash' | 'easypaisa', receipt_no: erReceiptNo || null,
               status: 'paid' as const, invoice_number: invoiceNumber, notes: null,
               created_at: new Date().toISOString(),
               sync_status: 'pending' as const,
@@ -285,6 +291,8 @@ export function ErPage() {
       }
 
       setErFee(0)
+      setErPaymentMethod('cash')
+      setErReceiptNo('')
       setErSelectedPatient(null)
       setErPatientSearch('')
       setShowForm(false)
@@ -671,6 +679,30 @@ export function ErPage() {
                   className="w-full px-3 py-2 border border-orange-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 bg-white"
                   placeholder="e.g. 500"
                 />
+                {erFee > 0 && (
+                  <div className="mt-2 space-y-2">
+                    <select
+                      value={erPaymentMethod}
+                      onChange={(e) => setErPaymentMethod(e.target.value)}
+                      className="w-full px-3 py-2 border border-orange-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 bg-white"
+                    >
+                      <option value="cash">Cash</option>
+                      <option value="jazzcash">JazzCash</option>
+                      <option value="easypaisa">Easypaisa</option>
+                      <option value="bank_transfer">Bank Transfer</option>
+                      <option value="card">Card</option>
+                    </select>
+                    {['jazzcash', 'easypaisa', 'bank_transfer'].includes(erPaymentMethod) && (
+                      <input
+                        type="text"
+                        value={erReceiptNo}
+                        onChange={(e) => setErReceiptNo(e.target.value)}
+                        placeholder="Transaction ID"
+                        className="w-full px-3 py-2 border border-orange-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 bg-white"
+                      />
+                    )}
+                  </div>
+                )}
                 <p className="text-xs text-orange-600 mt-1">Will print as "PAYMENT PAID" on the ER token</p>
               </div>
 
@@ -721,7 +753,7 @@ export function ErPage() {
             <div className="overflow-y-auto flex-1">
               <div className="p-4">
                 <div ref={printRef}>
-                  <ErTokenPrint visit={selectedVisit} patient={printPatient ?? undefined} moName={printMoName} fee={printFee} />
+                  <ErTokenPrint visit={selectedVisit} patient={printPatient ?? undefined} moName={printMoName} fee={printFee} paymentMethod={printPaymentMethod} receiptNo={printReceiptNo} />
                 </div>
               </div>
             </div>

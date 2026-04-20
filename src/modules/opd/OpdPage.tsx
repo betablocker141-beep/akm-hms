@@ -146,7 +146,11 @@ export function OpdPage() {
   const [showPrintModal, setShowPrintModal] = useState(false)
   const [editingToken, setEditingToken] = useState<OpdToken | null>(null)
   const [opdFee, setOpdFee] = useState<number>(0)
+  const [opdPaymentMethod, setOpdPaymentMethod] = useState<string>('cash')
+  const [opdReceiptNo, setOpdReceiptNo] = useState<string>('')
   const [printFee, setPrintFee] = useState<number>(0)
+  const [printPaymentMethod, setPrintPaymentMethod] = useState<string>('cash')
+  const [printReceiptNo, setPrintReceiptNo] = useState<string>('')
   const [printPatient, setPrintPatient] = useState<Patient | null>(null)
   const printRef = useRef<HTMLDivElement>(null)
   const qc = useQueryClient()
@@ -379,6 +383,8 @@ export function OpdPage() {
       // Save patient & fee BEFORE clearing them — needed for print
       setPrintPatient(selectedPatient)
       setPrintFee(opdFee)
+      setPrintPaymentMethod(opdPaymentMethod)
+      setPrintReceiptNo(opdReceiptNo)
       setSelectedToken(record as unknown as OpdToken)
       setShowPrintModal(true)
       reset()
@@ -399,7 +405,7 @@ export function OpdPage() {
               items: [{ id: generateUUID(), invoice_id: localId, description: 'OPD Consultation Fee', quantity: 1, unit_price: opdFee, total: opdFee }],
               subtotal: opdFee, discount: 0, discount_type: 'amount' as const, tax: 0,
               total: opdFee, paid_amount: opdFee,
-              payment_method: 'cash' as const, receipt_no: null,
+              payment_method: opdPaymentMethod as 'cash' | 'card' | 'bank_transfer' | 'jazzcash' | 'easypaisa', receipt_no: opdReceiptNo || null,
               status: 'paid' as const, invoice_number: invoiceNumber, notes: null,
               created_at: new Date().toISOString(),
               sync_status: 'pending' as const,
@@ -432,6 +438,8 @@ export function OpdPage() {
       }
 
       setOpdFee(0)
+      setOpdPaymentMethod('cash')
+      setOpdReceiptNo('')
       setShowForm(false)
       setSelectedPatient(null)
       setPatientSearch('')
@@ -848,6 +856,30 @@ export function OpdPage() {
                   className="w-full px-3 py-2 border border-green-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
                   placeholder="e.g. 500"
                 />
+                {opdFee > 0 && (
+                  <div className="mt-2 space-y-2">
+                    <select
+                      value={opdPaymentMethod}
+                      onChange={(e) => setOpdPaymentMethod(e.target.value)}
+                      className="w-full px-3 py-2 border border-green-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
+                    >
+                      <option value="cash">Cash</option>
+                      <option value="jazzcash">JazzCash</option>
+                      <option value="easypaisa">Easypaisa</option>
+                      <option value="bank_transfer">Bank Transfer</option>
+                      <option value="card">Card</option>
+                    </select>
+                    {['jazzcash', 'easypaisa', 'bank_transfer'].includes(opdPaymentMethod) && (
+                      <input
+                        type="text"
+                        value={opdReceiptNo}
+                        onChange={(e) => setOpdReceiptNo(e.target.value)}
+                        placeholder="Transaction ID"
+                        className="w-full px-3 py-2 border border-green-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
+                      />
+                    )}
+                  </div>
+                )}
                 <p className="text-xs text-green-600 mt-1">This will appear as "Payment Received" on the token</p>
               </div>
 
@@ -899,6 +931,8 @@ export function OpdPage() {
                     patient={printPatient ?? undefined}
                     doctor={tokenDoctor ?? undefined}
                     fee={printFee}
+                    paymentMethod={printPaymentMethod}
+                    receiptNo={printReceiptNo}
                   />
                 </div>
               </div>

@@ -7,9 +7,11 @@ interface ErTokenPrintProps {
   patient?: Patient
   moName?: string
   fee?: number
+  paymentMethod?: string
+  receiptNo?: string
 }
 
-export function ErTokenPrint({ visit, patient, moName, fee }: ErTokenPrintProps) {
+export function ErTokenPrint({ visit, patient, moName, fee, paymentMethod, receiptNo }: ErTokenPrintProps) {
   const hospitalPhone = import.meta.env.VITE_HOSPITAL_PHONE || '042-35977450'
   const triageColors: Record<number, string> = {
     1: '#DC2626', 2: '#EA580C', 3: '#CA8A04', 4: '#16A34A', 5: '#2563EB',
@@ -109,10 +111,23 @@ export function ErTokenPrint({ visit, patient, moName, fee }: ErTokenPrintProps)
             <div style={{
               background: '#fff7ed', border: '1px solid #EA580C',
               borderRadius: '3px', padding: '2mm 3mm',
-              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
             }}>
-              <span style={{ color: '#9a3412', fontWeight: 800, fontSize: '12pt' }}>✔ PAID</span>
-              <span style={{ color: '#9a3412', fontWeight: 800, fontSize: '13pt' }}>Rs. {fee.toLocaleString()}</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ color: '#9a3412', fontWeight: 800, fontSize: '12pt' }}>✔ PAID</span>
+                <span style={{ color: '#9a3412', fontWeight: 800, fontSize: '13pt' }}>Rs. {fee.toLocaleString()}</span>
+              </div>
+              {paymentMethod && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1mm', fontSize: '9.5pt' }}>
+                  <span style={{ color: '#9a3412' }}>Method:</span>
+                  <span style={{ color: '#9a3412', fontWeight: 700 }}>{paymentMethod.replace('_', ' ').toUpperCase()}</span>
+                </div>
+              )}
+              {receiptNo && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9.5pt' }}>
+                  <span style={{ color: '#9a3412' }}>Txn ID:</span>
+                  <span style={{ color: '#9a3412', fontWeight: 700 }}>{receiptNo}</span>
+                </div>
+              )}
             </div>
           </>
         )}
