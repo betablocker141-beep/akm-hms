@@ -18,14 +18,9 @@ import { US_TEMPLATES } from '@/lib/ultrasound/templates'
 import { US_STUDY_TYPES } from '@/types'
 import type { UltrasoundReport, UsStudyType, Patient } from '@/types'
 
-// Columns present in Dexie but NOT yet in the live Supabase schema.
-// Strip these from every insert/update to prevent 400 Bad Request errors.
-// After running add_missing_columns.sql in Supabase, remove this set.
+// husbands_father_name is stored locally only; not in Supabase schema.
 const DEXIE_ONLY_FIELDS = new Set([
   'husbands_father_name',
-  'history',
-  'presenting_complaints',
-  'prescription',
 ])
 
 function stripDexieOnlyFields<T extends Record<string, unknown>>(obj: T): Partial<T> {

@@ -178,10 +178,25 @@ export function InvoicingPage() {
   const total = Math.max(0, subtotal - discountAmount)
   const balance = Math.max(0, total - (Number(watchedPaid) || 0))
 
-  const handlePrint = useReactToPrint({
+  const handleInvoicePrint = useReactToPrint({
     content: () => printRef.current,
-    documentTitle: `${printMode === 'receipt' ? 'Receipt' : 'Invoice'}-${selectedInvoice?.invoice_number}`,
+    documentTitle: `Invoice-${selectedInvoice?.invoice_number}`,
   })
+
+  const handlePrint = () => {
+    if (printMode === 'receipt') {
+      if (!printRef.current) return
+      const html = printRef.current.innerHTML
+      const win = window.open('', '_blank', 'width=420,height=700')
+      if (!win) return
+      win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Receipt-${selectedInvoice?.invoice_number ?? ''}</title><style>@page{size:80mm auto;margin:0}*{box-sizing:border-box}html,body{margin:0;padding:0;width:80mm;background:#fff}</style></head><body style="margin:0;padding:0;width:80mm;background:#fff">${html}</body></html>`)
+      win.document.close()
+      win.focus()
+      setTimeout(() => { win.print(); win.close() }, 400)
+    } else {
+      handleInvoicePrint()
+    }
+  }
 
   const resetForm = () => {
     reset()

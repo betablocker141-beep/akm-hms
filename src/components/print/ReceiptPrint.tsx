@@ -21,14 +21,13 @@ export function ReceiptPrint({ invoice, patientName, patientMrn }: ReceiptPrintP
 
   return (
     <div
-      className="print-area bg-white font-sans"
       style={{
-        width: '76mm',
-        minHeight: '55mm',
-        padding: '3mm 4mm',
-        fontFamily: 'Inter, sans-serif',
+        width: '100%',
+        padding: '4mm 4mm',
+        fontFamily: 'Arial, Helvetica, sans-serif',
         fontSize: '10pt',
         boxSizing: 'border-box',
+        backgroundColor: '#fff',
       }}
     >
       {/* Header */}

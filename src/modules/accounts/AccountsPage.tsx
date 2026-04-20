@@ -304,7 +304,8 @@ function computeEarnings(
     .map(([docId, t]) => {
       const doctor = doctorById.get(docId)!
       const gross = t.opd + t.er + t.ipd + t.us
-      return { doctor, total_opd: t.opd, total_er: t.er, total_ipd: t.ipd, total_us: t.us, gross, share_amount: Math.round(gross * doctor.share_percent / 100), paid: paidSet.has(docId) }
+      const shareBase = t.opd + t.er + t.us
+      return { doctor, total_opd: t.opd, total_er: t.er, total_ipd: t.ipd, total_us: t.us, gross, share_amount: Math.round(shareBase * doctor.share_percent / 100), paid: paidSet.has(docId) }
     })
     .filter(e => e.gross > 0)
     .sort((a, b) => b.gross - a.gross)
@@ -425,6 +426,7 @@ export function AccountsPage() {
   const dailyDoctorShares = useMemo(() => {
     const map = new Map<string, { doctor: Doctor; share: number }>()
     dailyInvoices.forEach(inv => {
+      if (inv.visit_type === 'ipd') return
       const docId = (inv as Invoice & { doctor_id?: string | null }).doctor_id
       if (!docId) return
       const doc = doctorMap.get(docId)
