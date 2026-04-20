@@ -6,6 +6,7 @@ import { Layout } from '@/components/layout/Layout'
 import { ProtectedRoute } from '@/modules/auth/ProtectedRoute'
 import { LoginPage } from '@/modules/auth/LoginPage'
 import { initSyncListeners } from '@/lib/sync/engine'
+import { initAuthListener } from '@/store/authStore'
 
 // Lazy-loaded module pages (improves initial load time)
 import { lazy, Suspense } from 'react'
@@ -41,6 +42,8 @@ function PageFallback() {
 function AppRoutes() {
   useEffect(() => {
     initSyncListeners()
+    const cleanupAuth = initAuthListener()
+    return cleanupAuth
   }, [])
 
   return (

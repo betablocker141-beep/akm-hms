@@ -77,10 +77,11 @@ export const useAuthStore = create<AuthState>()(
             set({ user: offlineUser, isLoading: false, error: null })
             return
           }
+          const hasCachedCred = !!localStorage.getItem(OFFLINE_CRED_KEY)
           set({
-            error: navigator.onLine === false && !localStorage.getItem(OFFLINE_CRED_KEY)
-              ? 'No internet connection. Please connect to the internet to sign in for the first time.'
-              : 'Incorrect password, or no internet connection. Connect to the internet to sign in.',
+            error: hasCachedCred
+              ? 'Incorrect password, or no internet connection. Connect to the internet to sign in.'
+              : 'No internet connection. Please connect to the internet to sign in for the first time.',
             isLoading: false,
           })
           throw new Error('Offline login failed')
@@ -142,8 +143,8 @@ export const useAuthStore = create<AuthState>()(
       logout: async () => {
         await supabase.auth.signOut()
         set({ user: null, error: null })
-        // intentionally keep OFFLINE_CRED_KEY so the same user can log back
-        // in offline after their shift without needing internet
+        // Intentionally keep OFFLINE_CRED_KEY so the same user can log back
+        // in offline after their shift without needing internet.
       },
 
       setUser: (user) => set({ user }),
@@ -170,3 +171,61 @@ export const useAuthStore = create<AuthState>()(
     }
   )
 )
+
+// ── Auth session listener ─────────────────────────────────────────────────────
+// Called once on app start. Handles two critical scenarios:
+//
+// 1. RESTORE: Zustand (akm-auth) was cleared (e.g. storage wipe, first load on
+//    a new browser tab) but the Supabase session is still valid in its own
+//    localStorage key. We silently restore the user so they never see the
+//    login page unnecessarily.
+//
+// 2. SIGN-OUT SYNC: If the server revokes the session while the device is
+//    online (e.g. password changed from another device), clear Zustand so the
+//    login page appears. If offline, keep the cached user for local access.
+
+export function initAuthListener(): () => void {
+  // Fire-and-forget: restore Zustand user from an existing Supabase session
+  supabase.auth.getSession().then(async ({ data: { session } }) => {
+    if (!session) return
+    // Already have a Zustand user — nothing to do
+    if (useAuthStore.getState().user) return
+
+    if (navigator.onLine) {
+      try {
+        const { data: profile } = await supabase
+          .from('users')
+          .select('*')
+          .eq('id', session.user.id)
+          .single()
+        if (profile) {
+          useAuthStore.getState().setUser(profile as AppUser)
+          return
+        }
+      } catch { /* network failed — fall through to offline cache */ }
+    }
+
+    // Offline or profile fetch failed: restore from offline credential cache
+    try {
+      const raw = localStorage.getItem(OFFLINE_CRED_KEY)
+      if (raw) {
+        const cred: OfflineCred = JSON.parse(raw)
+        if (cred.user && session.user.email === cred.email) {
+          useAuthStore.getState().setUser(cred.user)
+        }
+      }
+    } catch { /* ignore */ }
+  })
+
+  // Keep Zustand in sync with Supabase auth events going forward
+  const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+    if (event === 'SIGNED_OUT' && navigator.onLine) {
+      // Real server-side sign-out (token revoked, password changed, etc.)
+      // Only clear Zustand when online — offline SIGNED_OUT is just a
+      // failed token refresh, not a deliberate logout.
+      useAuthStore.getState().setUser(null)
+    }
+  })
+
+  return () => subscription.unsubscribe()
+}
