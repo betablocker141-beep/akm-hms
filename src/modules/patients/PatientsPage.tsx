@@ -17,12 +17,27 @@ const patientSchema = z.object({
   name: z.string().min(2, 'Name is required'),
   phone: z.string().min(10, 'Valid phone number required'),
   gender: z.enum(['Male', 'Female', 'Other']),
-  age: z.coerce.number().min(0).max(150).optional(),
+  guardian_name: z.string().optional(),
+  age_value: z.coerce.number().min(0).max(9999).optional(),
+  age_unit: z.enum(['years', 'months', 'days']),
   address: z.string().optional(),
   blood_group: z.string().optional(),
 })
 
 type PatientForm = z.infer<typeof patientSchema>
+
+function ageValueToDob(value: number, unit: 'years' | 'months' | 'days'): string {
+  const today = new Date()
+  if (unit === 'years') return `${today.getFullYear() - value}-01-01`
+  if (unit === 'months') {
+    const d = new Date(today)
+    d.setMonth(d.getMonth() - value)
+    return d.toISOString().slice(0, 10)
+  }
+  const d = new Date(today)
+  d.setDate(d.getDate() - value)
+  return d.toISOString().slice(0, 10)
+}
 
 function generateMRN(): string {
   const year = new Date().getFullYear().toString().slice(-2)
@@ -85,7 +100,7 @@ export function PatientsPage() {
     handleSubmit,
     reset,
     formState: { errors },
-  } = useForm<PatientForm>({ resolver: zodResolver(patientSchema) })
+  } = useForm<PatientForm>({ resolver: zodResolver(patientSchema), defaultValues: { age_unit: 'years' } })
 
   const handleRegister = async (data: PatientForm) => {
     setIsRegistering(true)
@@ -100,9 +115,10 @@ export function PatientsPage() {
       name: data.name,
       phone: data.phone,
       gender: data.gender as Gender,
-      dob: data.age ? `${new Date().getFullYear() - data.age}-01-01` : null,
+      dob: (data.age_value != null && data.age_value >= 0) ? ageValueToDob(data.age_value, data.age_unit) : null,
       address: data.address || null,
       blood_group: (data.blood_group as BloodGroup) || null,
+      guardian_name: data.guardian_name?.trim() || null,
       created_at: new Date().toISOString(),
       sync_status: 'pending' as const,
     }
@@ -142,6 +158,7 @@ export function PatientsPage() {
             dob: record.dob,
             address: record.address,
             blood_group: record.blood_group,
+            guardian_name: record.guardian_name,
             created_at: record.created_at,
           }).select().single()
 
@@ -213,6 +230,15 @@ export function PatientsPage() {
                   {errors.name && <p className="text-xs text-red-600 mt-1">{errors.name.message}</p>}
                 </div>
 
+                <div className="col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Father's / Husband's Name</label>
+                  <input
+                    {...register('guardian_name')}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-maroon-500"
+                    placeholder="Father's or husband's name"
+                  />
+                </div>
+
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Phone *</label>
                   <input
@@ -237,16 +263,26 @@ export function PatientsPage() {
                   {errors.gender && <p className="text-xs text-red-600 mt-1">{errors.gender.message}</p>}
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Age (years)</label>
-                  <input
-                    {...register('age')}
-                    type="number"
-                    min={0}
-                    max={150}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-maroon-500"
-                    placeholder="e.g. 35"
-                  />
+                <div className="col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Age</label>
+                  <div className="flex gap-2">
+                    <input
+                      {...register('age_value')}
+                      type="number"
+                      min={0}
+                      max={9999}
+                      className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-maroon-500"
+                      placeholder="e.g. 35"
+                    />
+                    <select
+                      {...register('age_unit')}
+                      className="w-28 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-maroon-500"
+                    >
+                      <option value="years">Years</option>
+                      <option value="months">Months</option>
+                      <option value="days">Days</option>
+                    </select>
+                  </div>
                 </div>
 
                 <div>
@@ -329,7 +365,12 @@ export function PatientsPage() {
                         <div className="w-8 h-8 rounded-full bg-maroon-100 flex items-center justify-center flex-shrink-0">
                           <User className="w-4 h-4 text-maroon-500" />
                         </div>
-                        <span className="font-medium text-gray-800">{p.name}</span>
+                        <div>
+                          <span className="font-medium text-gray-800">{p.name}</span>
+                          {p.guardian_name && (
+                            <p className="text-xs text-gray-400">F/H: {p.guardian_name}</p>
+                          )}
+                        </div>
                       </div>
                     </td>
                     <td className="px-4 py-3 text-gray-600">

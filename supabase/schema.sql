@@ -9,16 +9,19 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- ─── PATIENTS ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS patients (
-  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  mrn          TEXT NOT NULL UNIQUE,
-  name         TEXT NOT NULL,
-  dob          DATE,
-  gender       TEXT NOT NULL CHECK (gender IN ('Male','Female','Other')),
-  phone        TEXT NOT NULL,
-  address      TEXT,
-  blood_group  TEXT CHECK (blood_group IN ('A+','A-','B+','B-','AB+','AB-','O+','O-','Unknown')),
-  created_at   TIMESTAMPTZ DEFAULT NOW()
+  id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  mrn            TEXT NOT NULL UNIQUE,
+  name           TEXT NOT NULL,
+  dob            DATE,
+  gender         TEXT NOT NULL CHECK (gender IN ('Male','Female','Other')),
+  phone          TEXT NOT NULL,
+  address        TEXT,
+  blood_group    TEXT CHECK (blood_group IN ('A+','A-','B+','B-','AB+','AB-','O+','O-','Unknown')),
+  guardian_name  TEXT,
+  created_at     TIMESTAMPTZ DEFAULT NOW()
 );
+-- Run this if adding to an existing database:
+-- ALTER TABLE patients ADD COLUMN IF NOT EXISTS guardian_name TEXT;
 CREATE INDEX IF NOT EXISTS idx_patients_phone ON patients(phone);
 CREATE INDEX IF NOT EXISTS idx_patients_mrn   ON patients(mrn);
 CREATE INDEX IF NOT EXISTS idx_patients_name  ON patients USING gin(to_tsvector('english', name));

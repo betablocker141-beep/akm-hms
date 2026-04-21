@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts'
-import { Download, Printer, CheckCircle, CalendarDays, TrendingUp } from 'lucide-react'
+import { Download, Printer, CheckCircle, CalendarDays, TrendingUp, Stethoscope } from 'lucide-react'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
 import { AKMLogo } from '@/components/shared/AKMLogo'
@@ -227,6 +227,22 @@ async function fetchPaidSet(month: number, year: number): Promise<Set<string>> {
   } catch { return new Set() }
 }
 
+async function fetchOpdTokensByRange(fromDate: string, toDate: string): Promise<OpdToken[]> {
+  return fetchWithFallback(
+    async () => {
+      const { data, error } = await supabase
+        .from('opd_tokens').select('id, token_number, patient_id, doctor_id, date, time_slot, status, created_at')
+        .gte('date', fromDate).lte('date', toDate).order('date').order('created_at')
+      if (error) throw error
+      return (data ?? []) as OpdToken[]
+    },
+    async () => {
+      const all = await db.opd_tokens.where('date').between(fromDate, toDate, true, true).toArray()
+      return all as unknown as OpdToken[]
+    },
+  )
+}
+
 // ── Earnings computation ──────────────────────────────────────────────────────
 
 function computeEarnings(
@@ -317,8 +333,12 @@ export function AccountsPage() {
   const [selectedYear,  setSelectedYear]  = useState(new Date().getFullYear())
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1)
   const [dailyDate,     setDailyDate]     = useState(todayString())
+  const [drReportFrom,  setDrReportFrom]  = useState(todayString())
+  const [drReportTo,    setDrReportTo]    = useState(todayString())
+  const [drReportDoc,   setDrReportDoc]   = useState<string>('')
   const qc = useQueryClient()
-  const printRef = useRef<HTMLDivElement>(null)
+  const printRef    = useRef<HTMLDivElement>(null)
+  const drPrintRef  = useRef<HTMLDivElement>(null)
 
   const handlePrint = () => {
     if (!printRef.current) return
@@ -422,12 +442,34 @@ export function AccountsPage() {
     [doctors],
   )
 
+  // Cross-table fallback maps for daily collection (same approach as monthly computeEarnings)
+  const dailyOpdDocMap = useMemo(() => {
+    const m = new Map<string, string>()
+    dailyOpdTokens.forEach(t => { if (t.doctor_id) m.set(t.patient_id, t.doctor_id) })
+    return m
+  }, [dailyOpdTokens])
+
+  const dailyErDocMap = useMemo(() => {
+    const m = new Map<string, string>()
+    dailyErVisits.forEach(v => { if (v.doctor_id) m.set(v.patient_id, v.doctor_id) })
+    return m
+  }, [dailyErVisits])
+
+  const resolveDocId = useMemo(() => (inv: Invoice, opdMap: Map<string,string>, erMap: Map<string,string>): string | undefined => {
+    const direct = (inv as Invoice & { doctor_id?: string | null }).doctor_id
+    if (direct) return direct
+    if (inv.visit_type === 'opd') return opdMap.get(inv.patient_id)
+    if (inv.visit_type === 'er')  return erMap.get(inv.patient_id)
+    return undefined
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // Daily doctor share breakdown
   const dailyDoctorShares = useMemo(() => {
     const map = new Map<string, { doctor: Doctor; share: number }>()
     dailyInvoices.forEach(inv => {
       if (inv.visit_type === 'ipd') return
-      const docId = (inv as Invoice & { doctor_id?: string | null }).doctor_id
+      const docId = resolveDocId(inv, dailyOpdDocMap, dailyErDocMap)
       if (!docId) return
       const doc = doctorMap.get(docId)
       if (!doc) return
@@ -437,7 +479,63 @@ export function AccountsPage() {
       if (existing) { existing.share += share } else { map.set(docId, { doctor: doc, share }) }
     })
     return [...map.values()].sort((a, b) => b.share - a.share)
-  }, [dailyInvoices, doctorMap])
+  }, [dailyInvoices, doctorMap, dailyOpdDocMap, dailyErDocMap, resolveDocId])
+
+  // Doctor-wise OPD token report
+  const { data: drReportTokens = [], isFetching: drReportLoading } = useQuery({
+    queryKey: ['dr-opd-tokens', drReportFrom, drReportTo],
+    queryFn: () => fetchOpdTokensByRange(drReportFrom, drReportTo),
+    enabled: !!drReportFrom && !!drReportTo && drReportFrom <= drReportTo,
+  })
+
+  const drReportRows = useMemo(() => {
+    const filtered = drReportDoc
+      ? drReportTokens.filter(t => t.doctor_id === drReportDoc)
+      : drReportTokens
+    const grouped = new Map<string, { doctor: Doctor; tokens: OpdToken[] }>()
+    for (const tok of filtered) {
+      const docId = tok.doctor_id ?? ''
+      const doc = doctors.find(d => d.id === docId)
+      if (!doc) continue
+      if (!grouped.has(docId)) grouped.set(docId, { doctor: doc, tokens: [] })
+      grouped.get(docId)!.tokens.push(tok)
+    }
+    return [...grouped.values()].sort((a, b) => b.tokens.length - a.tokens.length)
+  }, [drReportTokens, drReportDoc, doctors])
+
+  const drReportPatientIds = useMemo(
+    () => [...new Set(drReportTokens.map(t => t.patient_id))],
+    [drReportTokens],
+  )
+  const { data: drPatientNames = {} } = useQuery({
+    queryKey: ['dr-report-patient-names', drReportPatientIds.sort().join(',')],
+    queryFn:  () => fetchPatientNames(drReportPatientIds),
+    enabled:  drReportPatientIds.length > 0,
+  })
+
+  const handleDrPrint = () => {
+    if (!drPrintRef.current) return
+    const cssLinks = Array.from(document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]'))
+      .map(l => `<link rel="stylesheet" href="${l.href}">`).join('')
+    const html = drPrintRef.current.innerHTML
+    const win = window.open('', '_blank', 'width=860,height=1100')
+    if (!win) return
+    win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>OPD-Doctor-Report</title>${cssLinks}<style>@page{size:A4 portrait;margin:10mm}body{padding:8px;background:#fff}</style></head><body>${html}</body></html>`)
+    win.document.close()
+    win.focus()
+    setTimeout(() => { win.print(); win.close() }, 800)
+  }
+
+  // Map visit_ref_id → paid_amount for OPD tokens fee display
+  const opdInvoiceMap = useMemo(() => {
+    const map = new Map<string, number>()
+    dailyInvoices.forEach(inv => {
+      if (inv.visit_type === 'opd' && inv.visit_ref_id && inv.paid_amount > 0) {
+        map.set(inv.visit_ref_id, inv.paid_amount)
+      }
+    })
+    return map
+  }, [dailyInvoices])
 
   const totalRevenue = revenue.reduce((s, r) => s + r.opd + r.er + r.ipd + r.us, 0)
   const earningsTotal = earnings.reduce((s, e) => s + e.share_amount, 0)
@@ -565,18 +663,21 @@ export function AccountsPage() {
                         <th className="text-left px-3 py-2 font-medium text-blue-700">Patient</th>
                         <th className="text-left px-3 py-2 font-medium text-blue-700">Doctor</th>
                         <th className="text-left px-3 py-2 font-medium text-blue-700">Time</th>
+                        <th className="text-right px-3 py-2 font-medium text-blue-700">Amount</th>
                         <th className="text-left px-3 py-2 font-medium text-blue-700">Status</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-blue-50">
                       {dailyOpdTokens.map(tok => {
                         const doc = doctorMap.get(tok.doctor_id ?? '')
+                        const fee = opdInvoiceMap.get(tok.id) ?? opdInvoiceMap.get((tok as OpdToken & { local_id?: string }).local_id ?? '') ?? opdInvoiceMap.get((tok as OpdToken & { server_id?: string }).server_id ?? '')
                         return (
                           <tr key={tok.id} className="hover:bg-blue-50/50">
                             <td className="px-3 py-1.5 font-bold text-blue-600">{tok.token_number}</td>
                             <td className="px-3 py-1.5 text-gray-700">{patientNames[tok.patient_id] ?? '—'}</td>
                             <td className="px-3 py-1.5 text-gray-600">{doc?.name.split(' ').slice(0,2).join(' ') ?? '—'}</td>
                             <td className="px-3 py-1.5 text-gray-500">{tok.time_slot ?? '—'}</td>
+                            <td className="px-3 py-1.5 text-right font-medium text-green-700">{fee ? `Rs. ${fee.toLocaleString()}` : '—'}</td>
                             <td className="px-3 py-1.5 capitalize text-gray-500">{tok.status}</td>
                           </tr>
                         )
@@ -652,7 +753,7 @@ export function AccountsPage() {
                   <tbody className="divide-y divide-gray-100">
                     {dailyInvoices.map((inv, idx) => {
                       const bal = (inv.total ?? 0) - (inv.paid_amount ?? 0)
-                      const docId = (inv as Invoice & { doctor_id?: string | null }).doctor_id
+                      const docId = resolveDocId(inv, dailyOpdDocMap, dailyErDocMap)
                       const doc = docId ? doctorMap.get(docId) : undefined
                       const drShare = doc ? Math.round((inv.paid_amount ?? 0) * doc.share_percent / 100) : 0
                       return (
@@ -791,6 +892,115 @@ export function AccountsPage() {
               <span className="ml-2 text-xs text-gray-400">— each doctor's % applied to their invoices for this day</span>
             </div>
           </>
+        )}
+      </div>
+
+      {/* ── Doctor-wise OPD Token Report ─────────────────────────────────── */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6 mb-8">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+          <h3 className="font-semibold text-gray-800 flex items-center gap-2">
+            <Stethoscope className="w-4 h-4 text-maroon-500" />
+            OPD Tokens by Doctor
+          </h3>
+          <div className="flex items-center gap-2 flex-wrap">
+            <input
+              type="date"
+              value={drReportFrom}
+              onChange={e => setDrReportFrom(e.target.value)}
+              className="text-sm border border-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-maroon-400"
+            />
+            <span className="text-gray-400 text-sm">to</span>
+            <input
+              type="date"
+              value={drReportTo}
+              onChange={e => setDrReportTo(e.target.value)}
+              className="text-sm border border-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-maroon-400"
+            />
+            <select
+              value={drReportDoc}
+              onChange={e => setDrReportDoc(e.target.value)}
+              className="text-sm border border-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-maroon-400"
+            >
+              <option value="">All Doctors</option>
+              {doctors.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+            <button
+              onClick={handleDrPrint}
+              disabled={drReportRows.length === 0}
+              className="flex items-center gap-1.5 border border-gray-300 hover:bg-gray-50 px-3 py-1.5 rounded-lg text-sm disabled:opacity-40"
+            >
+              <Printer className="w-4 h-4" /> Print
+            </button>
+          </div>
+        </div>
+
+        {drReportLoading ? (
+          <div className="flex justify-center py-6"><LoadingSpinner /></div>
+        ) : drReportRows.length === 0 ? (
+          <p className="text-center py-6 text-gray-400 text-sm">No OPD tokens found for selected range.</p>
+        ) : (
+          <div ref={drPrintRef}>
+            {/* Print header */}
+            <div className="hidden print:block mb-4 text-center border-b-2 border-maroon-500 pb-3">
+              <div className="flex justify-center mb-1"><AKMLogo size={40} /></div>
+              <h2 className="text-base font-bold text-maroon-700">ALIM KHATOON MEDICARE</h2>
+              <p className="text-sm text-gray-600 font-medium">
+                OPD Tokens by Doctor — {formatDate(drReportFrom)}{drReportFrom !== drReportTo ? ` to ${formatDate(drReportTo)}` : ''}
+              </p>
+            </div>
+
+            {/* Summary cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-4">
+              {drReportRows.map(({ doctor, tokens }) => (
+                <div key={doctor.id} className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 flex justify-between items-center">
+                  <div>
+                    <p className="font-semibold text-gray-800 text-sm">{doctor.name.split(' ').slice(0,2).join(' ')}</p>
+                    <p className="text-xs text-gray-400">{doctor.specialty}</p>
+                  </div>
+                  <span className="text-blue-700 font-bold text-xl">{tokens.length}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Detail table */}
+            {drReportRows.map(({ doctor, tokens }) => (
+              <div key={doctor.id} className="mb-5">
+                <p className="text-xs font-semibold text-blue-700 uppercase tracking-wide mb-2">
+                  {doctor.name} ({tokens.length} token{tokens.length !== 1 ? 's' : ''})
+                </p>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs border border-blue-100 rounded-lg overflow-hidden">
+                    <thead className="bg-blue-50">
+                      <tr>
+                        <th className="text-left px-3 py-2 font-medium text-blue-700">Token #</th>
+                        <th className="text-left px-3 py-2 font-medium text-blue-700">Patient</th>
+                        <th className="text-left px-3 py-2 font-medium text-blue-700">Date</th>
+                        <th className="text-left px-3 py-2 font-medium text-blue-700">Time</th>
+                        <th className="text-left px-3 py-2 font-medium text-blue-700">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-blue-50">
+                      {tokens.map(tok => (
+                        <tr key={tok.id} className="hover:bg-blue-50/50">
+                          <td className="px-3 py-1.5 font-bold text-blue-600">{tok.token_number}</td>
+                          <td className="px-3 py-1.5 text-gray-700">{drPatientNames[tok.patient_id] ?? '—'}</td>
+                          <td className="px-3 py-1.5 text-gray-500">{formatDate(tok.date)}</td>
+                          <td className="px-3 py-1.5 text-gray-500">{tok.time_slot ?? '—'}</td>
+                          <td className="px-3 py-1.5 capitalize text-gray-500">{tok.status}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
+
+            {/* Print footer */}
+            <div className="hidden print:block mt-4 pt-3 border-t border-gray-300 text-xs text-gray-500 text-center">
+              Total tokens: <strong>{drReportRows.reduce((s, r) => s + r.tokens.length, 0)}</strong>
+              {' '}· Printed: {new Date().toLocaleString('en-PK')} · AKM Hospital Management System
+            </div>
+          </div>
         )}
       </div>
 

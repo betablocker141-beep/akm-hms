@@ -44,12 +44,17 @@ export function normalisePhone(phone: string): string {
   return '+92' + digits
 }
 
-/** Calculate age from DOB string */
+/** Calculate age from DOB string — shows days/months for babies */
 export function calculateAge(dob: string | null): string {
   if (!dob) return '—'
   try {
     const birth = parseISO(dob)
     const today = new Date()
+    const diffMs = today.getTime() - birth.getTime()
+    const diffDays = Math.floor(diffMs / 86400000)
+    if (diffDays < 30) return `${diffDays} day${diffDays !== 1 ? 's' : ''}`
+    const diffMonths = Math.floor(diffDays / 30.44)
+    if (diffMonths < 24) return `${diffMonths} mo`
     let years = today.getFullYear() - birth.getFullYear()
     const m = today.getMonth() - birth.getMonth()
     if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) years--
