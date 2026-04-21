@@ -442,12 +442,34 @@ export function AccountsPage() {
     [doctors],
   )
 
+  // Cross-table fallback maps for daily collection (same approach as monthly computeEarnings)
+  const dailyOpdDocMap = useMemo(() => {
+    const m = new Map<string, string>()
+    dailyOpdTokens.forEach(t => { if (t.doctor_id) m.set(t.patient_id, t.doctor_id) })
+    return m
+  }, [dailyOpdTokens])
+
+  const dailyErDocMap = useMemo(() => {
+    const m = new Map<string, string>()
+    dailyErVisits.forEach(v => { if (v.doctor_id) m.set(v.patient_id, v.doctor_id) })
+    return m
+  }, [dailyErVisits])
+
+  const resolveDocId = useMemo(() => (inv: Invoice, opdMap: Map<string,string>, erMap: Map<string,string>): string | undefined => {
+    const direct = (inv as Invoice & { doctor_id?: string | null }).doctor_id
+    if (direct) return direct
+    if (inv.visit_type === 'opd') return opdMap.get(inv.patient_id)
+    if (inv.visit_type === 'er')  return erMap.get(inv.patient_id)
+    return undefined
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // Daily doctor share breakdown
   const dailyDoctorShares = useMemo(() => {
     const map = new Map<string, { doctor: Doctor; share: number }>()
     dailyInvoices.forEach(inv => {
       if (inv.visit_type === 'ipd') return
-      const docId = (inv as Invoice & { doctor_id?: string | null }).doctor_id
+      const docId = resolveDocId(inv, dailyOpdDocMap, dailyErDocMap)
       if (!docId) return
       const doc = doctorMap.get(docId)
       if (!doc) return
@@ -457,7 +479,7 @@ export function AccountsPage() {
       if (existing) { existing.share += share } else { map.set(docId, { doctor: doc, share }) }
     })
     return [...map.values()].sort((a, b) => b.share - a.share)
-  }, [dailyInvoices, doctorMap])
+  }, [dailyInvoices, doctorMap, dailyOpdDocMap, dailyErDocMap, resolveDocId])
 
   // Doctor-wise OPD token report
   const { data: drReportTokens = [], isFetching: drReportLoading } = useQuery({
@@ -731,7 +753,7 @@ export function AccountsPage() {
                   <tbody className="divide-y divide-gray-100">
                     {dailyInvoices.map((inv, idx) => {
                       const bal = (inv.total ?? 0) - (inv.paid_amount ?? 0)
-                      const docId = (inv as Invoice & { doctor_id?: string | null }).doctor_id
+                      const docId = resolveDocId(inv, dailyOpdDocMap, dailyErDocMap)
                       const doc = docId ? doctorMap.get(docId) : undefined
                       const drShare = doc ? Math.round((inv.paid_amount ?? 0) * doc.share_percent / 100) : 0
                       return (
