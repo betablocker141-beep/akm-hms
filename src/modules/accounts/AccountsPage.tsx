@@ -107,15 +107,15 @@ async function fetchDailyInvoices(date: string): Promise<Invoice[]> {
     if (error) throw error
     const online = (data ?? []) as Invoice[]
 
-    // Merge in any locally-pending invoices not yet pushed to Supabase
-    const pending = await db.invoices
-      .where('sync_status').equals('pending')
-      .filter(i => i.created_at >= startISO && i.created_at < endISO)
-      .toArray()
-    const onlineIds = new Set(online.map(i => i.id))
+    // Merge ALL local invoices for the day — not just 'pending' — so that records
+    // the sync engine marks 'conflict' don't vanish from the daily revenue view.
+    const allLocal = await db.invoices.orderBy('created_at').toArray()
+    const localForDay = allLocal.filter(i => i.created_at >= startISO && i.created_at < endISO)
     const onlineCreatedAts = new Set(online.map(i => i.created_at).filter(Boolean))
-    const localOnly = pending.filter(p =>
-      !onlineIds.has(p.local_id) && !onlineCreatedAts.has(p.created_at)
+    const onlineServerIds  = new Set(online.map(i => i.id))
+    const localOnly = localForDay.filter(l =>
+      !onlineCreatedAts.has(l.created_at) &&
+      !(l.server_id && onlineServerIds.has(l.server_id))
     )
     return [...online, ...(localOnly as unknown as Invoice[])]
   } catch {
