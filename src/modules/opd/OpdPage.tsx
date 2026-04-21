@@ -36,7 +36,7 @@ async function fetchDayOpdInvoices(date: string): Promise<Invoice[]> {
 
   try {
     const { data, error } = await Promise.race([
-      supabase.from('invoices').select('id, visit_ref_id, paid_amount, created_at')
+      supabase.from('invoices').select('id, visit_ref_id, patient_id, paid_amount, created_at')
         .eq('visit_type', 'opd').gte('created_at', startISO).lt('created_at', endISO),
       new Promise<never>((_, r) => setTimeout(() => r(new Error('timeout')), 3000)),
     ]) as { data: Invoice[] | null; error: unknown }
@@ -213,12 +213,18 @@ export function OpdPage() {
     refetchInterval: isToday ? 30_000 : false,
   })
 
+  // byRef: keyed by visit_ref_id (token UUID). byPatient: fallback for invoices
+  // whose visit_ref_id was the local token UUID and can't match the Supabase UUID.
   const tokenFeeMap = useMemo(() => {
-    const map = new Map<string, number>()
+    const byRef     = new Map<string, number>()
+    const byPatient = new Map<string, number>()
     for (const inv of dayInvoices) {
-      if (inv.visit_ref_id && inv.paid_amount > 0) map.set(inv.visit_ref_id, inv.paid_amount)
+      if (inv.paid_amount > 0) {
+        if (inv.visit_ref_id) byRef.set(inv.visit_ref_id, inv.paid_amount)
+        if (inv.patient_id)   byPatient.set(inv.patient_id, inv.paid_amount)
+      }
     }
-    return map
+    return { byRef, byPatient }
   }, [dayInvoices])
 
   const { data: doctors = [] } = useQuery({
@@ -675,7 +681,10 @@ export function OpdPage() {
                       <td className="px-4 py-3 text-gray-600">{token.time_slot}</td>
                       <td className="px-4 py-3">
                         {(() => {
-                          const fee = tokenFeeMap.get(token.id) ?? tokenFeeMap.get(token.local_id ?? '') ?? tokenFeeMap.get(token.server_id ?? '')
+                          const fee = tokenFeeMap.byRef.get(token.id)
+                            ?? tokenFeeMap.byRef.get(token.local_id ?? '')
+                            ?? tokenFeeMap.byRef.get(token.server_id ?? '')
+                            ?? tokenFeeMap.byPatient.get(token.patient_id)
                           return fee ? (
                             <span className="text-green-700 font-medium text-sm">Rs. {fee.toLocaleString()}</span>
                           ) : (
