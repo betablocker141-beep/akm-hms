@@ -154,11 +154,23 @@ export function DashboardPage() {
       }
       const { data } = await supabase
         .from('invoices')
-        .select('paid_amount')
+        .select('paid_amount, created_at, id')
         .gte('created_at', dayStart)
         .lt('created_at', dayEnd)
-      const total = data?.reduce((s, i) => s + Number(i.paid_amount ?? 0), 0) ?? 0
-      return { total, count: data?.length ?? 0 }
+      const online = data ?? []
+      // Merge all local invoices for the day — including conflict-marked — so
+      // records not yet synced don't vanish from the revenue card.
+      const onlineCreatedAts = new Set(online.map(i => i.created_at).filter(Boolean))
+      const onlineServerIds  = new Set(online.map(i => i.id))
+      const allLocal = await db.invoices.orderBy('created_at').toArray()
+      const localOnly = allLocal.filter(l =>
+        l.created_at >= dayStart && l.created_at < dayEnd &&
+        !onlineCreatedAts.has(l.created_at) &&
+        !(l.server_id && onlineServerIds.has(l.server_id))
+      )
+      const combined = [...online, ...localOnly]
+      const total = combined.reduce((s, i) => s + Number((i as any).paid_amount ?? 0), 0)
+      return { total, count: combined.length }
     },
     refetchInterval: 30_000,
   })
