@@ -41,13 +41,18 @@ async function fetchDayOpdInvoices(date: string): Promise<Invoice[]> {
       new Promise<never>((_, r) => setTimeout(() => r(new Error('timeout')), 3000)),
     ]) as { data: Invoice[] | null; error: unknown }
     if (error || !data) return localInvoices()
-    // Merge in pending-local invoices not yet in Supabase
+    // Merge ALL local OPD invoices for the day regardless of sync_status,
+    // so conflict-marked records don't disappear from the fee column.
     const onlineCreatedAts = new Set(data.map(i => i.created_at).filter(Boolean))
-    const pending = await db.invoices
-      .where('sync_status').equals('pending')
-      .filter(i => i.visit_type === 'opd' && i.created_at >= startISO && i.created_at < endISO && !onlineCreatedAts.has(i.created_at))
-      .toArray()
-    return [...data, ...(pending as unknown as Invoice[])]
+    const onlineServerIds  = new Set(data.map(i => i.id))
+    const allLocal = await db.invoices.orderBy('created_at').toArray()
+    const localOnly = allLocal.filter(l =>
+      l.visit_type === 'opd' &&
+      l.created_at >= startISO && l.created_at < endISO &&
+      !onlineCreatedAts.has(l.created_at) &&
+      !(l.server_id && onlineServerIds.has(l.server_id))
+    )
+    return [...data, ...(localOnly as unknown as Invoice[])]
   } catch {
     return localInvoices()
   }
