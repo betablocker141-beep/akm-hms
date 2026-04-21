@@ -169,6 +169,10 @@ export function OpdPage() {
   const [printPaymentMethod, setPrintPaymentMethod] = useState<string>('cash')
   const [printReceiptNo, setPrintReceiptNo] = useState<string>('')
   const [printPatient, setPrintPatient] = useState<Patient | null>(null)
+  const [collectFeeToken, setCollectFeeToken] = useState<OpdToken | null>(null)
+  const [collectFeeAmount, setCollectFeeAmount] = useState<number>(0)
+  const [collectFeeMethod, setCollectFeeMethod] = useState<string>('cash')
+  const [collectFeeReceiptNo, setCollectFeeReceiptNo] = useState<string>('')
   const printRef = useRef<HTMLDivElement>(null)
   const qc = useQueryClient()
   useSyncStore()
@@ -504,6 +508,62 @@ export function OpdPage() {
     deleteToken.mutate(id)
   }
 
+  const collectFee = useMutation({
+    mutationFn: async ({ token, fee, paymentMethod, receiptNo }: { token: OpdToken; fee: number; paymentMethod: string; receiptNo: string }) => {
+      const online = useSyncStore.getState().isOnline && navigator.onLine
+      const invoiceNumber = await getNextInvoiceNumber()
+      const localId = generateUUID()
+      const inv = {
+        id: localId, local_id: localId, server_id: null as string | null,
+        patient_id: token.patient_id,
+        doctor_id: token.doctor_id,
+        visit_type: 'opd' as const,
+        visit_ref_id: token.id,
+        items: [{ id: generateUUID(), invoice_id: localId, description: 'OPD Consultation Fee', quantity: 1, unit_price: fee, total: fee }],
+        subtotal: fee, discount: 0, discount_type: 'amount' as const, tax: 0,
+        total: fee, paid_amount: fee,
+        payment_method: paymentMethod as 'cash' | 'card' | 'bank_transfer' | 'jazzcash' | 'easypaisa',
+        receipt_no: receiptNo || null,
+        status: 'paid' as const, invoice_number: invoiceNumber, notes: null,
+        created_at: new Date().toISOString(),
+        sync_status: 'pending' as const,
+      }
+      await db.invoices.add(inv)
+      if (online) {
+        void (async () => {
+          try {
+            let serverPatientId = token.patient_id
+            const localPat = await db.patients.filter((p) => p.local_id === token.patient_id || p.server_id === token.patient_id).first()
+            if (localPat?.server_id) serverPatientId = localPat.server_id
+            const { data: saved, error } = await supabase.from('invoices').insert({
+              patient_id: serverPatientId, doctor_id: inv.doctor_id,
+              visit_type: inv.visit_type, visit_ref_id: token.server_id ?? token.id,
+              items: inv.items, subtotal: inv.subtotal, discount: inv.discount,
+              discount_type: inv.discount_type, tax: inv.tax, total: inv.total,
+              paid_amount: inv.paid_amount, payment_method: inv.payment_method,
+              status: inv.status, invoice_number: inv.invoice_number,
+              notes: inv.notes, created_at: inv.created_at,
+            }).select().single()
+            if (!error && saved) {
+              await db.invoices.where('local_id').equals(localId).modify({ server_id: (saved as { id: string }).id, sync_status: 'synced' })
+            }
+          } catch { /* stay pending */ }
+        })()
+      }
+      return inv
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['opd-day-invoices', selectedDate] })
+      qc.invalidateQueries({ queryKey: ['daily-collection'] })
+      qc.invalidateQueries({ queryKey: ['accounts-totals'] })
+      qc.invalidateQueries({ queryKey: ['dash-revenue'] })
+      setCollectFeeToken(null)
+      setCollectFeeAmount(0)
+      setCollectFeeMethod('cash')
+      setCollectFeeReceiptNo('')
+    },
+  })
+
   // Get doctor/patient for selected token for WA links
   const tokenDoctor = selectedToken
     ? doctors.find((d) => d.id === selectedToken.doctor_id)
@@ -599,7 +659,14 @@ export function OpdPage() {
                           const fee = tokenFeeMap.get(token.id) ?? tokenFeeMap.get(token.local_id ?? '') ?? tokenFeeMap.get(token.server_id ?? '')
                           return fee ? (
                             <span className="text-green-700 font-medium text-sm">Rs. {fee.toLocaleString()}</span>
-                          ) : <span className="text-gray-300 text-sm">—</span>
+                          ) : (
+                            <button
+                              onClick={() => { setCollectFeeToken(token); setCollectFeeAmount(0); setCollectFeeMethod('cash'); setCollectFeeReceiptNo('') }}
+                              className="text-xs bg-green-50 text-green-700 hover:bg-green-100 border border-green-200 px-2 py-1 rounded font-medium"
+                            >
+                              + Add Fee
+                            </button>
+                          )
                         })()}
                       </td>
                       <td className="px-4 py-3">
@@ -943,6 +1010,80 @@ export function OpdPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Collect Fee Modal */}
+      {collectFeeToken && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl w-full max-w-sm shadow-2xl">
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-gray-800">
+                Collect Fee — Token #{collectFeeToken.token_number}
+              </h2>
+              <button onClick={() => setCollectFeeToken(null)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+            </div>
+            <div className="p-6 space-y-4">
+              <p className="text-sm text-gray-600">
+                Patient: <strong>{patientsMap[collectFeeToken.patient_id]?.name ?? '—'}</strong>
+              </p>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Consultation Fee (Rs.) *</label>
+                <input
+                  type="number"
+                  min={1}
+                  autoFocus
+                  value={collectFeeAmount || ''}
+                  onChange={(e) => setCollectFeeAmount(Number(e.target.value))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                  placeholder="e.g. 500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Payment Method</label>
+                <select
+                  value={collectFeeMethod}
+                  onChange={(e) => setCollectFeeMethod(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                >
+                  <option value="cash">Cash</option>
+                  <option value="jazzcash">JazzCash</option>
+                  <option value="easypaisa">Easypaisa</option>
+                  <option value="bank_transfer">Bank Transfer</option>
+                  <option value="card">Card</option>
+                </select>
+              </div>
+              {['jazzcash', 'easypaisa', 'bank_transfer'].includes(collectFeeMethod) && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Transaction ID</label>
+                  <input
+                    type="text"
+                    value={collectFeeReceiptNo}
+                    onChange={(e) => setCollectFeeReceiptNo(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                    placeholder="Transaction ID"
+                  />
+                </div>
+              )}
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setCollectFeeToken(null)}
+                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-sm hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={collectFeeAmount <= 0 || collectFee.isPending}
+                  onClick={() => collectFee.mutate({ token: collectFeeToken, fee: collectFeeAmount, paymentMethod: collectFeeMethod, receiptNo: collectFeeReceiptNo })}
+                  className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium disabled:opacity-50"
+                >
+                  {collectFee.isPending ? 'Saving...' : 'Record Payment'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
