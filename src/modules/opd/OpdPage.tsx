@@ -26,16 +26,31 @@ async function fetchDayOpdInvoices(date: string): Promise<Invoice[]> {
   const startISO = new Date(`${date}T00:00:00`).toISOString()
   const nextDay = new Date(`${date}T00:00:00`); nextDay.setDate(nextDay.getDate() + 1)
   const endISO = nextDay.toISOString()
+
+  const localInvoices = async () => {
+    const all = await db.invoices.orderBy('created_at').toArray()
+    return all.filter(i => i.visit_type === 'opd' && i.created_at >= startISO && i.created_at < endISO) as unknown as Invoice[]
+  }
+
+  if (!navigator.onLine) return localInvoices()
+
   try {
     const { data, error } = await Promise.race([
-      supabase.from('invoices').select('id, visit_ref_id, paid_amount, local_id')
+      supabase.from('invoices').select('id, visit_ref_id, paid_amount, created_at')
         .eq('visit_type', 'opd').gte('created_at', startISO).lt('created_at', endISO),
       new Promise<never>((_, r) => setTimeout(() => r(new Error('timeout')), 3000)),
     ]) as { data: Invoice[] | null; error: unknown }
-    if (!error && data) return data
-  } catch { /* fall through */ }
-  const all = await db.invoices.orderBy('created_at').toArray()
-  return all.filter(i => i.visit_type === 'opd' && i.created_at >= startISO && i.created_at < endISO) as unknown as Invoice[]
+    if (error || !data) return localInvoices()
+    // Merge in pending-local invoices not yet in Supabase
+    const onlineCreatedAts = new Set(data.map(i => i.created_at).filter(Boolean))
+    const pending = await db.invoices
+      .where('sync_status').equals('pending')
+      .filter(i => i.visit_type === 'opd' && i.created_at >= startISO && i.created_at < endISO && !onlineCreatedAts.has(i.created_at))
+      .toArray()
+    return [...data, ...(pending as unknown as Invoice[])]
+  } catch {
+    return localInvoices()
+  }
 }
 
 const tokenSchema = z.object({
@@ -529,26 +544,25 @@ export function OpdPage() {
         sync_status: 'pending' as const,
       }
       await db.invoices.add(inv)
+      // Wait for Supabase insert so the daily-collection refetch finds it immediately
       if (online) {
-        void (async () => {
-          try {
-            let serverPatientId = token.patient_id
-            const localPat = await db.patients.filter((p) => p.local_id === token.patient_id || p.server_id === token.patient_id).first()
-            if (localPat?.server_id) serverPatientId = localPat.server_id
-            const { data: saved, error } = await supabase.from('invoices').insert({
-              patient_id: serverPatientId, doctor_id: inv.doctor_id,
-              visit_type: inv.visit_type, visit_ref_id: token.server_id ?? token.id,
-              items: inv.items, subtotal: inv.subtotal, discount: inv.discount,
-              discount_type: inv.discount_type, tax: inv.tax, total: inv.total,
-              paid_amount: inv.paid_amount, payment_method: inv.payment_method,
-              status: inv.status, invoice_number: inv.invoice_number,
-              notes: inv.notes, created_at: inv.created_at,
-            }).select().single()
-            if (!error && saved) {
-              await db.invoices.where('local_id').equals(localId).modify({ server_id: (saved as { id: string }).id, sync_status: 'synced' })
-            }
-          } catch { /* stay pending */ }
-        })()
+        try {
+          let serverPatientId = token.patient_id
+          const localPat = await db.patients.filter((p) => p.local_id === token.patient_id || p.server_id === token.patient_id).first()
+          if (localPat?.server_id) serverPatientId = localPat.server_id
+          const { data: saved, error } = await supabase.from('invoices').insert({
+            patient_id: serverPatientId, doctor_id: inv.doctor_id,
+            visit_type: inv.visit_type, visit_ref_id: token.server_id ?? token.id,
+            items: inv.items, subtotal: inv.subtotal, discount: inv.discount,
+            discount_type: inv.discount_type, tax: inv.tax, total: inv.total,
+            paid_amount: inv.paid_amount, payment_method: inv.payment_method,
+            status: inv.status, invoice_number: inv.invoice_number,
+            notes: inv.notes, created_at: inv.created_at,
+          }).select().single()
+          if (!error && saved) {
+            await db.invoices.where('local_id').equals(localId).modify({ server_id: (saved as { id: string }).id, sync_status: 'synced' })
+          }
+        } catch { /* stay pending, sync engine will retry */ }
       }
       return inv
     },

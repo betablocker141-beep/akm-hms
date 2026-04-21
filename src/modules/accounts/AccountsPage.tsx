@@ -91,20 +91,36 @@ async function fetchDailyInvoices(date: string): Promise<Invoice[]> {
   const startISO = new Date(`${date}T00:00:00`).toISOString()
   const nextDay  = new Date(`${date}T00:00:00`); nextDay.setDate(nextDay.getDate() + 1)
   const endISO   = nextDay.toISOString()
-  return fetchWithFallback(
-    async () => {
-      const { data, error } = await supabase
-        .from('invoices').select('*')
-        .gte('created_at', startISO).lt('created_at', endISO)
-        .order('created_at')
-      if (error) throw error
-      return (data ?? []) as Invoice[]
-    },
-    async () => {
-      const all = await db.invoices.orderBy('created_at').toArray()
-      return all.filter(i => i.created_at >= startISO && i.created_at < endISO) as unknown as Invoice[]
-    },
-  )
+
+  const localForDate = async () => {
+    const all = await db.invoices.orderBy('created_at').toArray()
+    return all.filter(i => i.created_at >= startISO && i.created_at < endISO) as unknown as Invoice[]
+  }
+
+  if (!navigator.onLine) return localForDate()
+
+  try {
+    const { data, error } = await supabase
+      .from('invoices').select('*')
+      .gte('created_at', startISO).lt('created_at', endISO)
+      .order('created_at')
+    if (error) throw error
+    const online = (data ?? []) as Invoice[]
+
+    // Merge in any locally-pending invoices not yet pushed to Supabase
+    const pending = await db.invoices
+      .where('sync_status').equals('pending')
+      .filter(i => i.created_at >= startISO && i.created_at < endISO)
+      .toArray()
+    const onlineIds = new Set(online.map(i => i.id))
+    const onlineCreatedAts = new Set(online.map(i => i.created_at).filter(Boolean))
+    const localOnly = pending.filter(p =>
+      !onlineIds.has(p.local_id) && !onlineCreatedAts.has(p.created_at)
+    )
+    return [...online, ...(localOnly as unknown as Invoice[])]
+  } catch {
+    return localForDate()
+  }
 }
 
 async function fetchDailyOpdTokens(date: string): Promise<OpdToken[]> {
