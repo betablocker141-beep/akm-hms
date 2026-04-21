@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -11,6 +11,7 @@ import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
 import { OpdTokenPrint } from '@/components/print/OpdTokenPrint'
 import { supabase } from '@/lib/supabase/client'
 import { db } from '@/lib/dexie/schema'
+import type { Invoice } from '@/types'
 import { generateUUID, formatDate, todayString, padNumber } from '@/lib/utils'
 import { fetchWithFallback } from '@/lib/utils/fetchWithFallback'
 import { useSyncStore } from '@/store/syncStore'
@@ -20,6 +21,22 @@ import {
   waOpdTokenDoctor,
 } from '@/lib/whatsapp/links'
 import type { OpdToken, Patient, Doctor } from '@/types'
+
+async function fetchDayOpdInvoices(date: string): Promise<Invoice[]> {
+  const startISO = new Date(`${date}T00:00:00`).toISOString()
+  const nextDay = new Date(`${date}T00:00:00`); nextDay.setDate(nextDay.getDate() + 1)
+  const endISO = nextDay.toISOString()
+  try {
+    const { data, error } = await Promise.race([
+      supabase.from('invoices').select('id, visit_ref_id, paid_amount, local_id')
+        .eq('visit_type', 'opd').gte('created_at', startISO).lt('created_at', endISO),
+      new Promise<never>((_, r) => setTimeout(() => r(new Error('timeout')), 3000)),
+    ]) as { data: Invoice[] | null; error: unknown }
+    if (!error && data) return data
+  } catch { /* fall through */ }
+  const all = await db.invoices.orderBy('created_at').toArray()
+  return all.filter(i => i.visit_type === 'opd' && i.created_at >= startISO && i.created_at < endISO) as unknown as Invoice[]
+}
 
 const tokenSchema = z.object({
   token_number: z.string().min(1, 'Token number required'),
@@ -165,6 +182,20 @@ export function OpdPage() {
     queryFn: () => fetchTokensByDate(selectedDate),
     refetchInterval: isToday ? 30_000 : false,
   })
+
+  const { data: dayInvoices = [] } = useQuery({
+    queryKey: ['opd-day-invoices', selectedDate],
+    queryFn: () => fetchDayOpdInvoices(selectedDate),
+    refetchInterval: isToday ? 30_000 : false,
+  })
+
+  const tokenFeeMap = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const inv of dayInvoices) {
+      if (inv.visit_ref_id && inv.paid_amount > 0) map.set(inv.visit_ref_id, inv.paid_amount)
+    }
+    return map
+  }, [dayInvoices])
 
   const { data: doctors = [] } = useQuery({
     queryKey: ['doctors-active'],
@@ -536,6 +567,7 @@ export function OpdPage() {
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Patient</th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Doctor</th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Time</th>
+                <th className="text-left px-4 py-3 font-medium text-gray-600">Fee</th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Status</th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Actions</th>
               </tr>
@@ -543,7 +575,7 @@ export function OpdPage() {
             <tbody className="divide-y divide-gray-100">
               {tokens.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="text-center py-12 text-gray-400">
+                  <td colSpan={7} className="text-center py-12 text-gray-400">
                     {isToday ? 'No tokens issued today. Click "New Token" to start.' : `No tokens found for ${formatDate(selectedDate)}.`}
                   </td>
                 </tr>
@@ -562,6 +594,14 @@ export function OpdPage() {
                       </td>
                       <td className="px-4 py-3 text-gray-600">{doc?.name ?? '—'}</td>
                       <td className="px-4 py-3 text-gray-600">{token.time_slot}</td>
+                      <td className="px-4 py-3">
+                        {(() => {
+                          const fee = tokenFeeMap.get(token.id) ?? tokenFeeMap.get(token.local_id ?? '') ?? tokenFeeMap.get(token.server_id ?? '')
+                          return fee ? (
+                            <span className="text-green-700 font-medium text-sm">Rs. {fee.toLocaleString()}</span>
+                          ) : <span className="text-gray-300 text-sm">—</span>
+                        })()}
+                      </td>
                       <td className="px-4 py-3">
                         <StatusBadge status={token.status} />
                       </td>

@@ -10,6 +10,7 @@ export interface Patient {
   phone: string
   address: string | null
   blood_group: BloodGroup | null
+  guardian_name: string | null
   created_at: string
   // Dexie extras
   sync_status?: SyncStatus
