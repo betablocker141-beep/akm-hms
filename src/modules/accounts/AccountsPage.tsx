@@ -77,13 +77,46 @@ async function fetchTotals() {
   const today = new Date()
   // Local-time month start so PKT records (UTC+5) are included correctly
   const monthStartISO = new Date(today.getFullYear(), today.getMonth(), 1).toISOString()
-  const { data: inv } = await supabase.from('invoices').select('total, paid_amount, status').gte('created_at', monthStartISO)
-  const monthRev = (inv ?? []).reduce((s, i) => s + (i.paid_amount ?? 0), 0)
-  const outstanding = (inv ?? []).filter(i => i.status !== 'paid').reduce((s, i) => s + Math.max(0, i.total - i.paid_amount), 0)
-  const { count: opdCount } = await supabase.from('opd_tokens').select('*', { count: 'exact', head: true }).gte('created_at', monthStartISO)
-  const { count: erCount }  = await supabase.from('er_visits').select('*', { count: 'exact', head: true }).gte('created_at', monthStartISO)
-  const { count: ipdCount } = await supabase.from('ipd_admissions').select('*', { count: 'exact', head: true }).gte('created_at', monthStartISO)
-  return { monthRev, outstanding, opdCount: opdCount ?? 0, erCount: erCount ?? 0, ipdCount: ipdCount ?? 0 }
+
+  // Offline fallback: read totals entirely from Dexie
+  if (!navigator.onLine) {
+    const allInv = await db.invoices.where('created_at').aboveOrEqual(monthStartISO).toArray()
+    const monthRev = allInv.reduce((s, i) => s + Number((i as unknown as { paid_amount?: number }).paid_amount ?? 0), 0)
+    const outstanding = allInv
+      .filter(i => i.status !== 'paid')
+      .reduce((s, i) => {
+        const inv = i as unknown as { total: number; paid_amount: number }
+        return s + Math.max(0, inv.total - inv.paid_amount)
+      }, 0)
+    const opdCount = await db.opd_tokens.where('created_at').aboveOrEqual(monthStartISO).count()
+    const erCount  = await db.er_visits.where('created_at').aboveOrEqual(monthStartISO).count()
+    const ipdCount = await db.ipd_admissions.where('created_at').aboveOrEqual(monthStartISO).count()
+    return { monthRev, outstanding, opdCount, erCount, ipdCount }
+  }
+
+  try {
+    const { data: inv } = await supabase.from('invoices').select('total, paid_amount, status').gte('created_at', monthStartISO)
+    const monthRev = (inv ?? []).reduce((s, i) => s + (i.paid_amount ?? 0), 0)
+    const outstanding = (inv ?? []).filter(i => i.status !== 'paid').reduce((s, i) => s + Math.max(0, i.total - i.paid_amount), 0)
+    const { count: opdCount } = await supabase.from('opd_tokens').select('*', { count: 'exact', head: true }).gte('created_at', monthStartISO)
+    const { count: erCount }  = await supabase.from('er_visits').select('*', { count: 'exact', head: true }).gte('created_at', monthStartISO)
+    const { count: ipdCount } = await supabase.from('ipd_admissions').select('*', { count: 'exact', head: true }).gte('created_at', monthStartISO)
+    return { monthRev, outstanding, opdCount: opdCount ?? 0, erCount: erCount ?? 0, ipdCount: ipdCount ?? 0 }
+  } catch {
+    // Network failed mid-request — fall back to Dexie
+    const allInv = await db.invoices.where('created_at').aboveOrEqual(monthStartISO).toArray()
+    const monthRev = allInv.reduce((s, i) => s + Number((i as unknown as { paid_amount?: number }).paid_amount ?? 0), 0)
+    const outstanding = allInv
+      .filter(i => i.status !== 'paid')
+      .reduce((s, i) => {
+        const inv = i as unknown as { total: number; paid_amount: number }
+        return s + Math.max(0, inv.total - inv.paid_amount)
+      }, 0)
+    const opdCount = await db.opd_tokens.where('created_at').aboveOrEqual(monthStartISO).count()
+    const erCount  = await db.er_visits.where('created_at').aboveOrEqual(monthStartISO).count()
+    const ipdCount = await db.ipd_admissions.where('created_at').aboveOrEqual(monthStartISO).count()
+    return { monthRev, outstanding, opdCount, erCount, ipdCount }
+  }
 }
 
 async function fetchDailyInvoices(date: string): Promise<Invoice[]> {

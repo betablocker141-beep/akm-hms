@@ -47,20 +47,35 @@ async function fetchInvoicesByDate(date: string): Promise<Invoice[]> {
   const startISO = new Date(`${date}T00:00:00`).toISOString()
   const nextDay  = new Date(`${date}T00:00:00`); nextDay.setDate(nextDay.getDate() + 1)
   const endISO   = nextDay.toISOString()
-  return fetchWithFallback(
-    async () => {
-      const { data, error } = await supabase
-        .from('invoices').select('*')
-        .gte('created_at', startISO).lt('created_at', endISO)
-        .order('created_at', { ascending: false })
-      if (error) throw error
-      return data as Invoice[]
-    },
-    async () => {
-      const all = await db.invoices.orderBy('created_at').reverse().toArray()
-      return all.filter(i => i.created_at >= startISO && i.created_at < endISO) as unknown as Invoice[]
-    },
-  )
+
+  const localForDate = async () => {
+    const all = await db.invoices.orderBy('created_at').reverse().toArray()
+    return all.filter(i => i.created_at >= startISO && i.created_at < endISO) as unknown as Invoice[]
+  }
+
+  if (!navigator.onLine) return localForDate()
+
+  try {
+    const { data, error } = await supabase
+      .from('invoices').select('*')
+      .gte('created_at', startISO).lt('created_at', endISO)
+      .order('created_at', { ascending: false })
+    if (error) throw error
+    const online = (data ?? []) as Invoice[]
+
+    // Merge local pending/conflict invoices not yet pushed to Supabase
+    const allLocal = await db.invoices.orderBy('created_at').reverse().toArray()
+    const onlineCreatedAts = new Set(online.map(i => i.created_at).filter(Boolean))
+    const onlineServerIds  = new Set(online.map(i => i.id))
+    const localOnly = allLocal.filter(l =>
+      l.created_at >= startISO && l.created_at < endISO &&
+      !onlineCreatedAts.has(l.created_at) &&
+      !(l.server_id && onlineServerIds.has(l.server_id))
+    )
+    return [...online, ...(localOnly as unknown as Invoice[])]
+  } catch {
+    return localForDate()
+  }
 }
 
 async function getNextInvoiceNumber(): Promise<string> {

@@ -79,6 +79,10 @@ const CLEANUP_AFTER_PULL = new Set<SyncableTable>([
 // Guard: prevent two runSync() calls from running at the same time.
 let _syncRunning = false
 
+// Guard: prevent initSyncListeners from registering duplicate handlers when
+// the AppRoutes component mounts more than once (React StrictMode, HMR).
+let _listenersInitialized = false
+
 async function syncTable(tableName: SyncableTable) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const localTable = (db as any)[tableName]
@@ -338,6 +342,9 @@ export async function countPending(): Promise<number> {
 
 /** Listen for online/offline events and trigger sync */
 export function initSyncListeners() {
+  if (_listenersInitialized) return
+  _listenersInitialized = true
+
   const { setOnline } = useSyncStore.getState()
 
   window.addEventListener('online', async () => {
