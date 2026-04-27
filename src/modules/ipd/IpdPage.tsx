@@ -31,14 +31,31 @@ const admitSchema = z.object({
 type AdmitForm = z.infer<typeof admitSchema>
 
 async function fetchAdmissions(): Promise<IpdAdmission[]> {
-  return fetchWithFallback(
-    async () => {
-      const { data, error } = await supabase.from('ipd_admissions').select('*').eq('status', 'admitted').order('admit_date', { ascending: false })
-      if (error) throw error
-      return data as IpdAdmission[]
-    },
-    () => db.ipd_admissions.where('status').equals('admitted').toArray() as unknown as Promise<IpdAdmission[]>,
-  )
+  const dexieAdmissions = await db.ipd_admissions
+    .where('status').equals('admitted').toArray() as unknown as IpdAdmission[]
+
+  if (!navigator.onLine) return dexieAdmissions
+
+  try {
+    const { data, error } = await Promise.race([
+      supabase.from('ipd_admissions').select('*').eq('status', 'admitted').order('admit_date', { ascending: false }),
+      new Promise<never>((_, r) => setTimeout(() => r(new Error('timeout')), 3000)),
+    ]) as { data: IpdAdmission[] | null; error: unknown }
+    if (error || !data) return dexieAdmissions
+
+    // Merge: include local-only (pending/unsynced) admissions not yet in Supabase
+    const supabaseIds = new Set(data.map((a) => a.id))
+    const supabaseCreatedAts = new Set(data.map((a) => a.created_at).filter(Boolean))
+    const dexieOnly = dexieAdmissions.filter((a) => {
+      const rec = a as unknown as { server_id: string | null; created_at: string }
+      if (rec.server_id && supabaseIds.has(rec.server_id)) return false
+      if (rec.created_at && supabaseCreatedAts.has(rec.created_at)) return false
+      return true
+    })
+    return [...dexieOnly, ...data]
+  } catch {
+    return dexieAdmissions
+  }
 }
 
 async function fetchDoctors(): Promise<Doctor[]> {

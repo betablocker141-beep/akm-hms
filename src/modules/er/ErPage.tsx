@@ -36,14 +36,32 @@ const erSchema = z.object({
 type ErForm = z.infer<typeof erSchema>
 
 async function fetchErVisitsByDate(date: string): Promise<ErVisit[]> {
-  return fetchWithFallback(
-    async () => {
-      const { data, error } = await supabase.from('er_visits').select('*').eq('visit_date', date).order('created_at', { ascending: false })
-      if (error) throw error
-      return data as ErVisit[]
-    },
-    () => db.er_visits.where('visit_date').equals(date).reverse().toArray() as unknown as Promise<ErVisit[]>,
-  )
+  const dexieVisits = await db.er_visits
+    .where('visit_date').equals(date)
+    .reverse().toArray() as unknown as ErVisit[]
+
+  if (!navigator.onLine) return dexieVisits
+
+  try {
+    const { data, error } = await Promise.race([
+      supabase.from('er_visits').select('*').eq('visit_date', date).order('created_at', { ascending: false }),
+      new Promise<never>((_, r) => setTimeout(() => r(new Error('timeout')), 3000)),
+    ]) as { data: ErVisit[] | null; error: unknown }
+    if (error || !data) return dexieVisits
+
+    // Merge: include local-only (pending/unsynced) visits not yet in Supabase
+    const supabaseIds = new Set(data.map((v) => v.id))
+    const supabaseCreatedAts = new Set(data.map((v) => v.created_at).filter(Boolean))
+    const dexieOnly = dexieVisits.filter((v) => {
+      const rec = v as unknown as { server_id: string | null; created_at: string }
+      if (rec.server_id && supabaseIds.has(rec.server_id)) return false
+      if (rec.created_at && supabaseCreatedAts.has(rec.created_at)) return false
+      return true
+    })
+    return [...dexieOnly, ...data]
+  } catch {
+    return dexieVisits
+  }
 }
 
 async function fetchDoctors(): Promise<Doctor[]> {
