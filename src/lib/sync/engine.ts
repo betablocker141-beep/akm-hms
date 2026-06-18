@@ -76,6 +76,15 @@ const CLEANUP_AFTER_PULL = new Set<SyncableTable>([
   'ipd_procedures',
 ])
 
+// ── Egress control ────────────────────────────────────────────────────────
+// Pushing local changes is cheap (only pending rows, usually none) so it can
+// run often. PULLING the full dataset from Supabase is the expensive part
+// (egress), so we throttle it hard. Override via VITE_SYNC_PULL_MINUTES.
+const PULL_INTERVAL_MS =
+  (Number(import.meta.env.VITE_SYNC_PULL_MINUTES) || 5) * 60_000
+const PUSH_TICK_MS = 30_000
+let _lastPullAt = 0
+
 // Guard: prevent two runSync() calls from running at the same time.
 let _syncRunning = false
 
@@ -157,9 +166,31 @@ async function syncTable(tableName: SyncableTable) {
   }
 }
 
-async function pullTableFromSupabase(tableName: SyncableTable) {
+/**
+ * Returns true if any field present in `record` differs from `existing`.
+ * Used to skip needless Dexie writes (and UI refetches) when a pulled row
+ * is byte-for-byte the same as what we already have locally.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function recordDiffers(existing: any, record: any): boolean {
+  for (const k of Object.keys(record)) {
+    const a = existing[k]
+    const b = record[k]
+    if (a === b) continue
+    // Compare objects/arrays structurally; primitives already failed === above
+    if (a && b && typeof a === 'object' && typeof b === 'object') {
+      if (JSON.stringify(a) === JSON.stringify(b)) continue
+    }
+    return true
+  }
+  return false
+}
+
+/** Pull one table. Returns the number of local records actually changed. */
+async function pullTableFromSupabase(tableName: SyncableTable): Promise<number> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const localTable = (db as any)[tableName]
+  let changed = 0
 
   // Build the Supabase query
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -180,7 +211,7 @@ async function pullTableFromSupabase(tableName: SyncableTable) {
 
   const { data, error } = await query
   if (error) throw error
-  if (!data || data.length === 0) return
+  if (!data || data.length === 0) return 0
 
   const CHUNK = 50
   for (let i = 0; i < data.length; i += CHUNK) {
@@ -204,7 +235,10 @@ async function pullTableFromSupabase(tableName: SyncableTable) {
 
           if (existing) {
             // Only overwrite if not pending (don't clobber unsaved local edits)
-            if (existing.sync_status !== 'pending') {
+            // AND only if the server copy actually differs — this avoids
+            // pointless writes + UI refetches when nothing changed.
+            if (existing.sync_status !== 'pending' && recordDiffers(existing, record)) {
+              changed++
               await localTable
                 .where('local_id')
                 .equals(existing.local_id)
@@ -224,9 +258,11 @@ async function pullTableFromSupabase(tableName: SyncableTable) {
               tableName !== 'ultrasound_reports' &&
               byLocalId.sync_status === 'synced'
             ) {
+              changed++
               await localTable.where('local_id').equals(byLocalId.local_id).delete()
             }
           } else {
+            changed++
             await localTable.put({
               ...record,
               local_id: record.id,
@@ -251,25 +287,31 @@ async function pullTableFromSupabase(tableName: SyncableTable) {
       .filter((r) => r.sync_status === 'synced' && r.server_id && !pulledIds.has(r.server_id))
     for (const r of stale) {
       try {
+        changed++
         await localTable.where('local_id').equals(r.local_id).delete()
       } catch {
         // Skip if already gone
       }
     }
   }
+
+  return changed
 }
 
-async function pullFromSupabase() {
+/** Pull every table. Returns the total number of local records changed. */
+async function pullFromSupabase(): Promise<number> {
+  let changed = 0
   for (const table of Object.keys(TABLE_MAP) as SyncableTable[]) {
     try {
-      await pullTableFromSupabase(table)
+      changed += await pullTableFromSupabase(table)
     } catch {
       // Don't let one failing table break the whole pull
     }
   }
+  return changed
 }
 
-export async function runSync() {
+export async function runSync(opts: { forcePull?: boolean } = {}) {
   if (_syncRunning) return
   _syncRunning = true
 
@@ -321,8 +363,21 @@ export async function runSync() {
 
     markSupabaseOnline()
 
-    await pullFromSupabase()
-    await queryClient.invalidateQueries({ refetchType: 'all' })
+    // Only PULL on the throttled cadence (or when explicitly forced, e.g. on
+    // reconnect / first load). This is the single biggest egress saver: a full
+    // 13-table pull no longer runs every 30s, only every few minutes.
+    const shouldPull =
+      opts.forcePull || Date.now() - _lastPullAt >= PULL_INTERVAL_MS
+    if (shouldPull) {
+      const changed = await pullFromSupabase()
+      _lastPullAt = Date.now()
+      // Refetch open pages only when the pull actually changed local data.
+      // This kills the per-cycle "refetch everything" storm that re-queried
+      // Supabase from every mounted page on top of the pull itself.
+      if (changed > 0) {
+        await queryClient.invalidateQueries({ refetchType: 'all' })
+      }
+    }
   } finally {
     setSyncing(false)
     _syncRunning = false
@@ -349,8 +404,8 @@ export function initSyncListeners() {
 
   window.addEventListener('online', async () => {
     setOnline(true)
-    await runSync()
-    await queryClient.invalidateQueries({ refetchType: 'all' })
+    // Coming back online: force a full pull to reconcile immediately.
+    await runSync({ forcePull: true })
   })
 
   window.addEventListener('offline', () => {
@@ -358,11 +413,25 @@ export function initSyncListeners() {
     void queryClient.invalidateQueries({ refetchType: 'all' })
   })
 
+  // Re-sync when the user returns to the tab (force a pull if it's been a
+  // while), so a backgrounded tab shows fresh data the moment it's focused.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && navigator.onLine) {
+      runSync({ forcePull: Date.now() - _lastPullAt >= PULL_INTERVAL_MS })
+        .catch(() => { /* silent */ })
+    }
+  })
+
   if (navigator.onLine) {
-    runSync()
+    runSync({ forcePull: true })
   }
 
+  // Background tick: pushes pending local changes (cheap) and pulls on the
+  // throttled cadence. Skip entirely when the tab is hidden — no point
+  // polling Supabase for a tab nobody is looking at (a major egress saver
+  // since staff leave the app open all day).
   setInterval(() => {
+    if (document.hidden || !navigator.onLine) return
     runSync().catch(() => { /* silent */ })
-  }, 30_000)
+  }, PUSH_TICK_MS)
 }
